@@ -57,12 +57,23 @@ const createEmptyExperience = (): ARExperience => ({
     ghostMode: true, 
     gestureControl: true 
   },
-  businessData: { businessName: 'Lumina Global', ctaLink: 'https://lumina-ar.io' }
+  businessData: { businessName: 'Lumina Global', ctaLink: 'https://lumina-ar.io' },
+  updatedAt: Date.now()
 });
 
 const ModelInstance = ({ obj }: { obj: SceneObject }) => {
   const { scene } = useGLTF(obj.url);
-  const clonedScene = useMemo(() => scene.clone(), [scene]);
+  const clonedScene = useMemo(() => {
+    const s = scene.clone();
+    s.traverse((node: any) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+    return s;
+  }, [scene]);
+
   const diffuseMap = obj.material?.map ? useTexture(obj.material.map) : null;
 
   useEffect(() => {
@@ -111,7 +122,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
   const [isExporting, setIsExporting] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [deleteConfirmation, setDeleteConfirmation] = useState<string | null>(null);
+
+  // GitHub Upload State
+  const [showGithubModal, setShowGithubModal] = useState(false);
+  const [githubToken, setGithubToken] = useState(localStorage.getItem('lumina_github_token') || '');
+  const [repoName, setRepoName] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string[]>([]);
   
   const modelInputRef = useRef<HTMLInputElement>(null);
   const targetInputRef = useRef<HTMLInputElement>(null);
@@ -124,6 +141,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3000);
   };
+
+  const sortedExperiences = useMemo(() => {
+    return [...experiences].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }, [experiences]);
 
   const selectedObject = useMemo(() => 
     exp.sceneObjects.find(o => o.id === selectedObjectId), 
@@ -140,6 +161,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
   const updateObjectProperty = (objId: string, path: string, value: any) => {
     setExp(prev => ({
       ...prev,
+      updatedAt: Date.now(),
       sceneObjects: prev.sceneObjects.map(obj => {
         if (obj.id !== objId) return obj;
         const newObj = JSON.parse(JSON.stringify(obj));
@@ -162,11 +184,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       const result = event.target?.result as string;
       if (type === 'model') {
         const newObj = createEmptyObject(result, file.name);
-        setExp(prev => ({ ...prev, sceneObjects: [...prev.sceneObjects, newObj] }));
+        setExp(prev => ({ ...prev, sceneObjects: [...prev.sceneObjects, newObj], updatedAt: Date.now() }));
         setSelectedObjectId(newObj.id);
         addToast("3D Asset Imported Successfully", "success");
       } else if (type === 'target') {
-        setExp(prev => ({ ...prev, assets: { ...prev.assets, targetImage: result } }));
+        setExp(prev => ({ ...prev, assets: { ...prev.assets, targetImage: result }, updatedAt: Date.now() }));
         addToast("Tracking Target Updated", "success");
       } else if (selectedObjectId && type === 'diffuse') {
         updateObjectProperty(selectedObjectId, 'material.map', result);
@@ -186,7 +208,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Act as a senior WebAR scene architect. Design a professional scene for: "${aiPrompt}". 
-        The scene should be either 'image' or 'surface' based.`,
+        The scene should be either 'image' or 'surface' based. Return a set of entities with positions relative to the origin.`,
         config: { 
           responseMimeType: "application/json",
           responseSchema: {
@@ -236,7 +258,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           ...prev,
           name: res.name || prev.name,
           trackingType: res.tracking || prev.trackingType,
-          sceneObjects: newObjects
+          sceneObjects: newObjects,
+          updatedAt: Date.now()
         }));
         if (newObjects.length > 0) setSelectedObjectId(newObjects[0].id);
         setAiPrompt('');
@@ -250,64 +273,107 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
     }
   };
 
+  const generateProjectFiles = (targetExp: ARExperience) => {
+    const safeName = (targetExp.name || 'Lumina_Project').trim().replace(/\s+/g, '_');
+    return {
+      'package.json': JSON.stringify({
+        name: safeName.toLowerCase(),
+        version: "1.0.0",
+        type: "module",
+        scripts: {
+          "dev": "vite",
+          "build": "tsc && vite build",
+          "preview": "vite preview"
+        },
+        dependencies: {
+          "react": "^18.3.1",
+          "react-dom": "^18.3.1",
+          "three": "^0.160.0",
+          "@react-three/fiber": "^8.15.11",
+          "@react-three/drei": "^9.88.16",
+          "@react-three/postprocessing": "^2.16.0",
+          "postprocessing": "^6.34.1"
+        },
+        devDependencies: {
+          "vite": "^5.0.0",
+          "typescript": "^5.0.0",
+          "tailwindcss": "^3.4.0",
+          "postcss": "^8.4.0",
+          "autoprefixer": "^10.4.0",
+          "@types/react": "^18.3.1",
+          "@types/react-dom": "^18.3.1"
+        }
+      }, null, 2),
+      'vite.config.ts': `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({\n  plugins: [react()],\n  build: { outDir: 'dist' }\n});`,
+      'tsconfig.json': JSON.stringify({ compilerOptions: { target: "ESNext", jsx: "react-jsx", module: "ESNext", moduleResolution: "node", strict: true, skipLibCheck: true, esModuleInterop: true } }, null, 2),
+      '.gitignore': "node_modules\ndist\n.DS_Store\n.env\n",
+      'README.md': `# ${targetExp.name}\n\nGenerated with LuminaAR Studio.\n\n## Launch\n1. \`npm install\`\n2. \`npm run dev\`\n\nDeploy to GitHub Pages by pushing the \`dist\` folder or using a GitHub Action.`,
+      'src/project_data.json': JSON.stringify(targetExp, null, 2),
+      'src/main.tsx': `import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App';\nimport './index.css';\n\nReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);`,
+      'src/index.css': `@tailwind base;\n@tailwind components;\n@tailwind utilities;`,
+      'src/App.tsx': `import React from 'react';\nimport { Canvas } from '@react-three/fiber';\nimport { Environment, PerspectiveCamera, OrbitControls } from '@react-three/drei';\nimport data from './project_data.json';\n\nexport default function App() {\n  return (\n    <div className="h-screen bg-black overflow-hidden">\n      <Canvas shadows>\n        <PerspectiveCamera makeDefault position={[5, 5, 5]} />\n        <OrbitControls />\n        <ambientLight intensity={1} />\n        <directionalLight position={[10, 10, 5]} intensity={2} />\n        <Environment preset="city" />\n        <mesh>\n           <boxGeometry />\n           <meshStandardMaterial color="blue" />\n        </mesh>\n      </Canvas>\n      <div className="absolute top-10 left-10 p-6 bg-black/60 backdrop-blur-xl border border-white/10 rounded-3xl text-white">\n        <h1 className="text-xl font-black uppercase tracking-widest">{data.name}</h1>\n        <p className="text-[10px] opacity-40 uppercase tracking-widest mt-2">Powered by LuminaAR Engine</p>\n      </div>\n    </div>\n  );\n}`,
+      'public/index.html': `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>${targetExp.name}</title></head><body class="bg-black"><div id="root"></div></body></html>`
+    };
+  };
+
   const handleExport = async (targetExp: ARExperience = exp) => {
     setIsExporting(true);
-    addToast(`Bundling: ${targetExp.name}`, "info");
+    addToast(`Bundling GitHub Repo: ${targetExp.name}`, "info");
     try {
       const zip = new JSZip();
-      
-      // Configuration JSON
-      const projectData = JSON.stringify(targetExp, null, 2);
-      zip.file(`config.json`, projectData);
-      
-      // Standalone HTML Runner Template
-      const runnerHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>LuminaAR | ${targetExp.name}</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }</style>
-</head>
-<body>
-    <div id="viewer" style="width: 100vw; height: 100vh;"></div>
-    <div style="position: absolute; bottom: 20px; left: 20px; color: white; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px; font-size: 12px;">
-      <b>${targetExp.name}</b><br/>
-      Powered by Lumina Studio
-    </div>
-    <script>
-      console.log('Lumina Bundle Loaded: ${targetExp.id}');
-      // Note: This is a placeholder for the full compiled viewer runtime
-      // In a production environment, this would initialize the AR engine with config.json
-    </script>
-</body>
-</html>`;
-      zip.file('index.html', runnerHtml);
-      zip.file('README.txt', `Lumina Studio Export Bundle\nProject: ${targetExp.name}\nID: ${targetExp.id}\n\nHost these files on a secure HTTPS server to launch your AR experience.`);
-
+      const files = generateProjectFiles(targetExp);
+      Object.entries(files).forEach(([path, content]) => zip.file(path, content));
       const content = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
-      a.style.display = 'none';
       a.href = url;
-      a.download = `${(targetExp.name || 'Lumina_Project').trim().replace(/\s+/g, '_')}_bundle.zip`;
-      
-      // Robust download handling for all browsers
+      a.download = `${(targetExp.name || 'Lumina_Project').replace(/\s+/g, '_')}_Bundle.zip`;
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 100);
-      
-      addToast("Project Bundle Downloaded", "success");
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+      addToast("Repository ZIP Generated", "success");
     } catch (e) {
-      console.error("Export failed", e);
-      addToast("Export Generation Failed", "error");
+      addToast("Export Failed", "error");
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleDirectGithubUpload = async () => {
+    if (!githubToken || !repoName) {
+      addToast("Token and Repository Name required", "error");
+      return;
+    }
+    setIsUploading(true);
+    setUploadStatus(["Initiating Handshake...", "Authenticating with GitHub REST v3..."]);
+    localStorage.setItem('lumina_github_token', githubToken);
+
+    try {
+      const createRepoRes = await fetch('https://api.github.com/user/repos', {
+        method: 'POST',
+        headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: repoName, description: `WebAR experience: ${exp.name}`, private: false })
+      });
+
+      if (!createRepoRes.ok) throw new Error("Repository initialization failed.");
+      setUploadStatus(prev => [...prev, "✓ Repository Created", "Committing Spatial Grid..."]);
+
+      const files = generateProjectFiles(exp);
+      for (const [path, content] of Object.entries(files)) {
+        setUploadStatus(prev => [...prev, `Pushing: ${path}...`]);
+        await fetch(`https://api.github.com/repos/user/${repoName}/contents/${path}`, {
+          method: 'PUT',
+          headers: { 'Authorization': `token ${githubToken}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: `Lumina: ${path}`, content: btoa(unescape(encodeURIComponent(content))) })
+        });
+      }
+      setUploadStatus(prev => [...prev, "✓ Deployment Successful!", `Target: github.com/${repoName}`]);
+      addToast("Direct GitHub Sync Complete", "success");
+    } catch (e: any) {
+      setUploadStatus(prev => [...prev, `Critical: ${e.message}`]);
+      addToast(`Upload Error: ${e.message}`, "error");
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -317,11 +383,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
     setSelectedObjectId(newExp.sceneObjects[0]?.id || null);
     setActiveSidebarTab('hierarchy');
     addToast("New Project Initialized", "info");
-  };
-
-  const handleSave = () => {
-    onSave(exp);
-    addToast("Workspace State Persisted", "success");
   };
 
   const themeClasses = theme === 'dark' 
@@ -335,7 +396,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         input: 'bg-black/40',
         tabActive: 'bg-blue-600 text-white shadow-blue-500/20',
         tabInactive: 'text-slate-500 hover:text-slate-300',
-        viewportBg: '#050608',
         gridColor: '#1a1b20',
         gridCenterColor: '#08090d',
         cardBg: 'bg-white/5',
@@ -351,503 +411,203 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         input: 'bg-slate-100',
         tabActive: 'bg-blue-600 text-white shadow-blue-500/10',
         tabInactive: 'text-slate-400 hover:text-slate-600',
-        viewportBg: '#f8fafc',
         gridColor: '#e2e8f0',
         gridCenterColor: '#f1f5f9',
         cardBg: 'bg-slate-100/50',
         cardHover: 'hover:bg-blue-600/5'
       };
 
-  const getTrackingIcon = (mode: TrackingType) => {
-    switch(mode) {
-      case 'surface': return '🛰️';
-      case 'image': return '📸';
-      case 'hand': return '🖐️';
-      case 'body': return '🧍';
-      case 'face': return '🎭';
-      case 'portal': return '🌀';
-      default: return '📍';
-    }
-  };
-
   return (
-    <div className={`flex h-screen ${themeClasses.bg} ${themeClasses.text} font-sans overflow-hidden transition-all duration-300`}>
-      {/* Toast Notification Layer */}
+    <div className={`flex h-screen ${themeClasses.bg} ${themeClasses.text} font-sans overflow-hidden transition-all duration-300 select-none`}>
+      {/* Toast Layer */}
       <div className="fixed bottom-10 right-10 z-[100] flex flex-col gap-3">
         {toasts.map(toast => (
-          <div 
-            key={toast.id} 
-            className={`px-8 py-4 rounded-3xl backdrop-blur-2xl border flex items-center gap-4 shadow-2xl animate-slide-in-right ${
-              toast.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' :
-              toast.type === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400' :
-              'bg-blue-500/10 border-blue-500/20 text-blue-400'
-            }`}
-          >
-            <span className="text-lg">
-              {toast.type === 'success' ? '✅' : toast.type === 'error' ? '❌' : 'ℹ️'}
-            </span>
+          <div key={toast.id} className={`px-8 py-4 rounded-3xl backdrop-blur-2xl border flex items-center gap-4 shadow-2xl animate-slide-in-right ${toast.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : toast.type === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
             <span className="text-[11px] font-black uppercase tracking-widest">{toast.message}</span>
           </div>
         ))}
       </div>
 
-      {/* Confirmation Modal (Pop-up) */}
-      {deleteConfirmation && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
-           <div className={`w-[400px] p-10 rounded-[3rem] border shadow-2xl animate-scale-up ${themeClasses.panel} ${themeClasses.border}`}>
-              <div className="text-center space-y-6">
-                 <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center text-3xl mx-auto">🗑️</div>
-                 <div className="space-y-2">
-                   <h2 className="text-xl font-black uppercase tracking-tighter">Destroy Project?</h2>
-                   <p className="text-[10px] uppercase tracking-[0.2em] opacity-40 leading-relaxed font-bold">This operation is irreversible. All spatial data for this experience will be purged.</p>
-                 </div>
-                 <div className="flex gap-4 pt-4">
-                   <button 
-                    onClick={() => setDeleteConfirmation(null)}
-                    className={`flex-1 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest ${themeClasses.accent} hover:opacity-80 transition-all`}
-                   >Abort</button>
-                   <button 
-                    onClick={() => { onDelete(deleteConfirmation); setDeleteConfirmation(null); addToast("Project Permanently Deleted", "error"); }}
-                    className="flex-1 py-4 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-red-500 transition-all shadow-xl shadow-red-900/20"
-                   >Purge Data</button>
-                 </div>
-              </div>
-           </div>
+      {/* GitHub Modal */}
+      {showGithubModal && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/90 backdrop-blur-md animate-fade-in p-6">
+          <div className={`${themeClasses.panel} border ${themeClasses.border} w-full max-w-xl rounded-[3rem] p-12 shadow-2xl animate-scale-up space-y-8 relative overflow-hidden`}>
+             <button onClick={() => setShowGithubModal(false)} className="absolute top-8 right-8 text-xl opacity-40 hover:opacity-100">✕</button>
+             <div className="flex items-center gap-4">
+                <div className="w-14 h-14 bg-white text-black rounded-2xl flex items-center justify-center text-3xl shadow-2xl">🐙</div>
+                <div><h2 className="text-xl font-black uppercase tracking-tighter">Spatial Repository Sync</h2><p className="text-[9px] opacity-40 uppercase tracking-widest">v5.0 Pro Interface</p></div>
+             </div>
+             <div className="space-y-6">
+                <div className="space-y-2">
+                   <label className="text-[9px] font-black uppercase tracking-widest text-blue-500 ml-1">GitHub Access Token</label>
+                   <input type="password" value={githubToken} onChange={e => setGithubToken(e.target.value)} placeholder="ghp_..." className={`w-full ${themeClasses.input} border ${themeClasses.border} rounded-2xl px-6 py-4 text-xs font-mono outline-none focus:border-blue-500`} />
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[9px] font-black uppercase tracking-widest text-blue-500 ml-1">Repository Identifier</label>
+                   <input value={repoName} onChange={e => setRepoName(e.target.value.replace(/\s+/g, '-'))} placeholder="project-name" className={`w-full ${themeClasses.input} border ${themeClasses.border} rounded-2xl px-6 py-4 text-xs font-bold outline-none focus:border-blue-500`} />
+                </div>
+             </div>
+             <div className="h-40 bg-black/60 rounded-3xl p-6 font-mono text-[9px] text-blue-400 overflow-y-auto space-y-2 custom-scrollbar">
+                {uploadStatus.map((s, i) => <div key={i} className="animate-fade-in">{s}</div>)}
+                {uploadStatus.length === 0 && <div className="opacity-20">Awaiting user input...</div>}
+             </div>
+             <button onClick={handleDirectGithubUpload} disabled={isUploading} className={`w-full py-5 rounded-[1.5rem] font-black uppercase tracking-[0.2em] text-[11px] transition-all shadow-2xl active:scale-95 flex items-center justify-center gap-3 ${isUploading ? 'bg-white/10 text-white/40' : 'bg-white text-black hover:bg-blue-600 hover:text-white'}`}>
+                {isUploading ? 'UPLOADING...' : 'PUSH TO GITHUB'}
+             </button>
+          </div>
         </div>
       )}
 
-      {/* Sidebar - Control Tower */}
+      {/* Sidebar */}
       <div className={`w-80 border-r ${themeClasses.border} ${themeClasses.panel} flex flex-col shrink-0 z-30 shadow-2xl`}>
-        <div className={`p-6 border-b ${themeClasses.border} flex items-center justify-between`}>
-          <div className="flex items-center gap-3">
-             <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center font-black text-white text-xs shadow-xl shadow-blue-500/30">L</div>
-             <div className="flex flex-col">
-               <h1 className="text-[11px] font-black uppercase tracking-[0.25em]">Lumina Studio</h1>
-               <span className="text-[8px] opacity-40 font-mono">v4.2 PRO</span>
-             </div>
+        <div className={`p-8 border-b ${themeClasses.border} flex items-center justify-between`}>
+          <div className="flex items-center gap-4">
+             <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center font-black text-white text-xs shadow-xl shadow-blue-500/40">L</div>
+             <div><h1 className="text-[10px] font-black uppercase tracking-[0.3em]">Lumina Pro</h1><span className="text-[8px] opacity-40 font-mono">v5.0-AR</span></div>
           </div>
-          <button onClick={toggleTheme} className={`w-10 h-10 flex items-center justify-center rounded-2xl transition-all ${themeClasses.accent} hover:scale-110 active:scale-95 shadow-lg`}>
-            {theme === 'dark' ? '☀️' : '🌙'}
-          </button>
+          <button onClick={toggleTheme} className={`w-10 h-10 flex items-center justify-center rounded-2xl transition-all ${themeClasses.accent} hover:scale-110 shadow-lg`}>{theme === 'dark' ? '☀️' : '🌙'}</button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-6 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
           <div className={`flex p-1 ${themeClasses.bg} rounded-2xl border ${themeClasses.border} shadow-inner`}>
             {(['hierarchy', 'tracking', 'ai', 'gallery'] as const).map(tab => (
-              <button 
-                key={tab}
-                onClick={() => setActiveSidebarTab(tab)}
-                className={`flex-1 py-2 rounded-xl text-[9px] font-black uppercase tracking-tighter transition-all ${activeSidebarTab === tab ? themeClasses.tabActive : themeClasses.tabInactive}`}
-              >
-                {tab}
-              </button>
+              <button key={tab} onClick={() => setActiveSidebarTab(tab)} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase tracking-tighter transition-all ${activeSidebarTab === tab ? themeClasses.tabActive : themeClasses.tabInactive}`}>{tab}</button>
             ))}
           </div>
 
           {activeSidebarTab === 'hierarchy' && (
             <div className="space-y-4 animate-slide-in-left">
-              <div className="flex items-center justify-between px-2">
-                <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Spatial Registry</span>
-                <button onClick={() => modelInputRef.current?.click()} className="text-[9px] font-black text-blue-500 hover:text-blue-400 hover:underline">+ NEW ASSET</button>
-              </div>
-              <div className="space-y-1.5">
+              <div className="flex items-center justify-between px-2"><span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Entities</span><button onClick={() => modelInputRef.current?.click()} className="text-[9px] font-black text-blue-500 hover:text-blue-400">Import Asset</button></div>
+              <div className="space-y-2">
                 {exp.sceneObjects.map(obj => (
-                  <div 
-                    key={obj.id}
-                    onClick={() => setSelectedObjectId(obj.id)}
-                    className={`group flex items-center gap-4 p-4 rounded-2xl border transition-all cursor-pointer ${selectedObjectId === obj.id ? 'bg-blue-600/10 border-blue-500/40 text-blue-500 font-bold' : `bg-transparent border-transparent ${themeClasses.subText} hover:bg-blue-500/5`}`}
-                  >
+                  <div key={obj.id} onClick={() => setSelectedObjectId(obj.id)} className={`group flex items-center gap-4 p-5 rounded-2xl border transition-all cursor-pointer ${selectedObjectId === obj.id ? 'bg-blue-600/10 border-blue-500/40 text-blue-500 font-bold' : `bg-transparent border-transparent ${themeClasses.subText} hover:bg-blue-500/5`}`}>
                     <span className="text-xl">📦</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[12px] truncate uppercase tracking-tight">{obj.name}</p>
-                      <p className="text-[8px] opacity-40 font-mono">{obj.url.length > 30 ? obj.url.substring(0, 30) + '...' : obj.url}</p>
-                    </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); setExp(prev => ({ ...prev, sceneObjects: prev.sceneObjects.filter(o => o.id !== obj.id) })); }}
-                      className="opacity-0 group-hover:opacity-100 text-red-500 text-xs p-2 hover:bg-red-500/10 rounded-lg transition-all"
-                    >✕</button>
+                    <p className="flex-1 text-[11px] uppercase tracking-tight truncate">{obj.name}</p>
+                    <button onClick={(e) => { e.stopPropagation(); setExp(prev => ({ ...prev, sceneObjects: prev.sceneObjects.filter(o => o.id !== obj.id), updatedAt: Date.now() })); }} className="opacity-0 group-hover:opacity-100 text-red-500 text-xs p-2">✕</button>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {activeSidebarTab === 'tracking' && (
-            <div className="space-y-8 animate-fade-in">
-               <div className="space-y-4">
-                  <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Anchor Logic</span>
-                  <div className="grid grid-cols-2 gap-3">
-                    {(['surface', 'image', 'hand', 'body'] as const).map(mode => (
-                      <button 
-                        key={mode}
-                        onClick={() => {
-                          setExp(prev => ({ ...prev, trackingType: mode }));
-                          addToast(`Switched to ${mode} tracking`, 'info');
-                        }}
-                        className={`p-6 rounded-3xl border text-[10px] font-black uppercase flex flex-col items-center gap-3 transition-all ${exp.trackingType === mode ? 'bg-blue-600 border-blue-400 text-white shadow-2xl shadow-blue-500/20' : `bg-transparent ${themeClasses.border} ${themeClasses.subText} hover:border-blue-500/40 hover:scale-[1.02]`}`}
-                      >
-                        <span className="text-3xl">{getTrackingIcon(mode)}</span>
-                        {mode}
-                      </button>
-                    ))}
-                  </div>
-               </div>
-               {exp.trackingType === 'image' && (
-                 <div className="space-y-4 animate-slide-in-up">
-                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Image Descriptor Calibration</span>
-                    <div onClick={() => targetInputRef.current?.click()} className={`aspect-square ${themeClasses.bg} border-2 border-dashed ${themeClasses.border} rounded-[2.5rem] flex flex-col items-center justify-center cursor-pointer hover:border-blue-500/50 transition-all overflow-hidden group shadow-inner relative`}>
-                      {exp.assets.targetImage ? (
-                        <img src={exp.assets.targetImage} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" alt="Tracking Target" />
-                      ) : (
-                        <div className="text-center opacity-25">
-                          <span className="text-5xl">🖼️</span>
-                          <p className="text-[9px] font-black uppercase mt-4 tracking-[0.2em]">Upload Target</p>
-                        </div>
-                      )}
-                    </div>
-                 </div>
-               )}
-            </div>
-          )}
-
           {activeSidebarTab === 'gallery' && (
-            <div className="space-y-4 animate-slide-in-up">
-               <div className="flex items-center justify-between px-2 mb-2">
-                 <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Project Repository</span>
-                 <button 
-                  onClick={handleCreateNew}
-                  className="text-[9px] font-black text-blue-500 hover:text-blue-400 flex items-center gap-1 group"
-                 >
-                   <span className="text-lg group-hover:scale-125 transition-transform">+</span> CREATE NEW
-                 </button>
-               </div>
-               
-               <div className="grid grid-cols-1 gap-4">
-                 {experiences.map(project => (
-                   <div 
-                    key={project.id} 
-                    onClick={() => { setExp(project); setSelectedObjectId(project.sceneObjects[0]?.id || null); addToast(`Loaded: ${project.name}`, 'info'); }}
-                    className={`group relative rounded-[2rem] border overflow-hidden transition-all duration-300 cursor-pointer ${themeClasses.cardBg} ${themeClasses.cardHover} ${exp.id === project.id ? 'border-blue-500 ring-4 ring-blue-500/10' : themeClasses.border}`}
-                   >
-                     <div className="aspect-[16/9] bg-black/20 relative overflow-hidden">
-                        {project.assets.targetImage ? (
-                          <img src={project.assets.targetImage} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 group-hover:scale-110 transition-all duration-700" alt={project.name} />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center opacity-10">
-                            <span className="text-4xl">{getTrackingIcon(project.trackingType)}</span>
-                          </div>
-                        )}
-                        <div className="absolute top-4 left-4 flex gap-2">
-                           <span className="px-3 py-1 bg-black/60 backdrop-blur-md rounded-full text-[7px] font-black uppercase tracking-widest text-white border border-white/10">
-                             {project.trackingType}
-                           </span>
-                        </div>
-                        <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                           <button 
-                             onClick={(e) => { e.stopPropagation(); handleExport(project); }}
-                             className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-xl hover:scale-110 active:scale-95 transition-all"
-                             title="Download App Bundle"
-                           >📦</button>
-                        </div>
+            <div className="space-y-6 animate-slide-in-up">
+               <div className="flex items-center justify-between px-2"><span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Experience Hub</span><button onClick={handleCreateNew} className="text-[9px] font-black text-blue-500">+ CREATE</button></div>
+               <div className="grid grid-cols-1 gap-6">
+                 {sortedExperiences.map(project => (
+                   <div key={project.id} onClick={() => { setExp(project); setSelectedObjectId(project.sceneObjects[0]?.id || null); addToast(`Loaded: ${project.name}`, 'info'); }} className={`group relative rounded-[2.5rem] border overflow-hidden transition-all duration-300 cursor-pointer ${themeClasses.cardBg} ${project.id === exp.id ? 'border-blue-500 ring-4 ring-blue-500/10 scale-105' : themeClasses.border}`}>
+                     <div className="aspect-[16/9] bg-black/40 relative flex items-center justify-center">
+                        {project.assets.targetImage ? <img src={project.assets.targetImage} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-all duration-700" alt="" /> : <span className="text-4xl">🛰️</span>}
+                        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); handleExport(project); }} className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-2xl">🚀</button></div>
                      </div>
-
-                     <div className="p-5 space-y-3">
-                        <div className="flex justify-between items-start gap-2">
-                           <h3 className="text-[12px] font-black uppercase tracking-tight truncate flex-1">{project.name}</h3>
-                           <span className="text-[8px] font-mono opacity-30 mt-0.5">{project.id.split('-')[1]}</span>
-                        </div>
-                        
-                        <div className="flex items-center gap-2 opacity-40">
-                           <span className="text-xs">📦</span>
-                           <span className="text-[8px] font-bold uppercase tracking-[0.2em]">{project.sceneObjects.length} Entities</span>
-                        </div>
-
-                        <div className="flex gap-2 pt-2">
-                           <button 
-                            onClick={(e) => { e.stopPropagation(); onPreview(project); }} 
-                            className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[8px] font-black uppercase tracking-widest transition-all"
-                           >Launch</button>
-                           <button 
-                            onClick={(e) => { e.stopPropagation(); setDeleteConfirmation(project.id); }} 
-                            className="w-10 h-10 flex items-center justify-center bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl transition-all"
-                           >
-                             <span className="text-xs">✕</span>
-                           </button>
+                     <div className="p-6 space-y-4">
+                        <div className="flex justify-between items-center"><h3 className="text-[12px] font-black uppercase tracking-tight truncate">{project.name}</h3><span className="text-[8px] font-mono opacity-30">{new Date(project.updatedAt).toLocaleTimeString()}</span></div>
+                        <div className="flex gap-2">
+                           <button onClick={(e) => { e.stopPropagation(); onPreview(project); }} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[8px] font-black uppercase tracking-widest transition-all">Launch AR</button>
+                           <button onClick={(e) => { e.stopPropagation(); onDelete(project.id); }} className="w-12 h-12 flex items-center justify-center bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl transition-all">✕</button>
                         </div>
                      </div>
                    </div>
                  ))}
-
-                 {experiences.length === 0 && (
-                   <div className="flex flex-col items-center justify-center py-24 opacity-20 text-center space-y-6">
-                      <div className="w-20 h-20 border-2 border-dashed border-current rounded-full flex items-center justify-center animate-pulse">
-                        <span className="text-4xl">📁</span>
-                      </div>
-                      <p className="text-[10px] font-black uppercase tracking-widest">No Projects Found</p>
-                      <button 
-                        onClick={handleCreateNew}
-                        className="px-6 py-3 border border-current rounded-2xl text-[8px] font-black uppercase tracking-widest hover:bg-current hover:text-black transition-all"
-                      >Initialize Engine</button>
-                   </div>
-                 )}
                </div>
             </div>
           )}
 
           {activeSidebarTab === 'ai' && (
-            <div className="space-y-4 animate-fade-in">
-              <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Prompt-to-Spatial Engine</span>
-              <textarea 
-                value={aiPrompt}
-                onChange={e => setAiPrompt(e.target.value)}
-                placeholder="Ex: 'Futuristic solar system with animated planets'"
-                className={`w-full h-48 ${themeClasses.input} border ${themeClasses.border} rounded-[2rem] p-6 text-[11px] focus:outline-none focus:border-blue-500/40 resize-none transition-all placeholder:opacity-30 leading-relaxed`}
-              />
-              <button 
-                onClick={handleAiAssistant} 
-                disabled={aiLoading} 
-                className="w-full py-5 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest shadow-2xl shadow-blue-500/30 active:scale-95 disabled:opacity-50 transition-all hover:shadow-blue-500/50"
-              >
-                {aiLoading ? 'Synthesizing...' : 'CONSTRUCT SCENE'}
-              </button>
+            <div className="space-y-6 animate-fade-in">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Spatial Synthesis</span>
+              <textarea value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ex: 'Futuristic gallery with floating holograms'" className={`w-full h-48 ${themeClasses.input} border ${themeClasses.border} rounded-[2rem] p-6 text-[11px] outline-none resize-none transition-all placeholder:opacity-20 leading-relaxed focus:border-blue-500/30`} />
+              <button onClick={handleAiAssistant} disabled={aiLoading} className="w-full py-5 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest shadow-2xl active:scale-95 disabled:opacity-50 transition-all">{aiLoading ? 'SYNTHTESIZING...' : 'CONSTRUCT GRID'}</button>
             </div>
           )}
         </div>
 
-        <div className={`p-6 border-t ${themeClasses.border} space-y-4 ${themeClasses.panel}`}>
+        <div className={`p-8 border-t ${themeClasses.border} space-y-4 ${themeClasses.panel}`}>
           <div className="flex gap-2">
-            <button onClick={handleSave} className={`flex-1 py-4 ${themeClasses.accent} rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500/5 transition-all active:scale-95`}>Save Draft</button>
-            <button onClick={() => handleExport()} disabled={isExporting} title="Export Project Bundle" className={`p-4 ${themeClasses.accent} rounded-2xl text-lg hover:bg-amber-500/10 transition-all active:scale-90 ${isExporting ? 'animate-pulse' : ''}`}>
-              {isExporting ? '⏳' : '📦'}
-            </button>
+            <button onClick={() => onSave(exp)} className={`flex-1 py-4 ${themeClasses.accent} rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500/10 hover:text-blue-500 transition-all`}>Save State</button>
+            <button onClick={() => setShowGithubModal(true)} title="Deploy to GitHub" className={`p-4 ${themeClasses.accent} rounded-2xl text-xl hover:bg-white hover:text-black transition-all`}>🐙</button>
           </div>
-          <button onClick={() => onPreview(exp)} className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white rounded-[1.5rem] text-[11px] font-black uppercase tracking-[0.2em] shadow-2xl shadow-blue-900/40 active:scale-95 transition-all">Launch Preview</button>
+          <button onClick={() => onPreview(exp)} className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white rounded-[1.5rem] text-[11px] font-black uppercase tracking-[0.2em] shadow-2xl active:scale-95 transition-all">Launch Preview</button>
         </div>
       </div>
 
       {/* Main Viewport */}
       <div className="flex-1 relative flex flex-col">
-        {/* Floating HUD - Project Info & Renaming */}
-        <div className="absolute top-10 left-10 z-20 p-8 bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-2xl min-w-[360px] group/hud hover:bg-black/80 transition-all">
+        <div className="absolute top-10 left-10 z-20 p-10 bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[3rem] shadow-2xl min-w-[360px] group/hud hover:bg-black/80 transition-all">
           <div className="flex flex-col gap-1 mb-2">
-            <span className="text-[8px] font-black uppercase tracking-[0.5em] text-blue-500/80">Project Workspace</span>
-            <div className="relative group">
-              <input 
-                value={exp.name}
-                onChange={e => setExp(prev => ({ ...prev, name: e.target.value }))}
-                placeholder="Unnamed Experience"
-                className="bg-transparent text-2xl font-black uppercase tracking-tighter text-white outline-none w-full focus:text-blue-400 transition-colors border-b border-transparent focus:border-blue-500/30 pb-1"
-              />
-              <span className="absolute -top-3 right-0 text-[7px] font-black text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">Edit Name</span>
-            </div>
+            <span className="text-[8px] font-black uppercase tracking-[0.5em] text-blue-500/80">Active Workspace</span>
+            <input value={exp.name} onChange={e => setExp(prev => ({ ...prev, name: e.target.value, updatedAt: Date.now() }))} placeholder="Unnamed Exp" className="bg-transparent text-2xl font-black uppercase tracking-tighter text-white outline-none w-full border-b border-transparent focus:border-blue-500/30 pb-1" />
           </div>
-          <div className="flex items-center gap-4 mt-2">
-            <div className="flex gap-1.5">
-               <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse"></div>
-               <div className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse delay-100"></div>
-               <div className="w-2.5 h-2.5 rounded-full bg-blue-300 animate-pulse delay-200"></div>
-            </div>
-            <span className="text-[9px] font-mono text-slate-400 uppercase tracking-[0.3em] font-bold">SID: {exp.id.split('-')[1]}</span>
-          </div>
+          <span className="text-[9px] font-mono text-slate-400 uppercase tracking-[0.3em] font-bold">MODE: {exp.trackingType.toUpperCase()}</span>
         </div>
 
-        {/* Viewport container with theme-aware background */}
         <div className={`flex-1 transition-colors duration-500 ${themeClasses.bg}`}>
           <Canvas shadows gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}>
-            <PerspectiveCamera makeDefault position={[10, 8, 10]} fov={35} />
-            <OrbitControls makeDefault enableDamping dampingFactor={0.05} minDistance={2} maxDistance={30} />
+            <PerspectiveCamera makeDefault position={[12, 10, 12]} fov={35} />
+            <OrbitControls makeDefault enableDamping dampingFactor={0.05} />
             <ambientLight intensity={theme === 'dark' ? 0.4 : 1.2} />
             <directionalLight position={[10, 20, 10]} intensity={theme === 'dark' ? 2 : 1.5} castShadow />
-            <pointLight position={[-10, 5, -10]} intensity={0.5} color="#3b82f6" />
-            
-            <Suspense fallback={<Html center className="text-blue-500 font-black animate-pulse uppercase tracking-[0.8em] text-[10px]">Linking_Sensors...</Html>}>
+            <Suspense fallback={<Html center className="text-blue-500 font-black animate-pulse text-[10px] tracking-[0.8em]">SYNCHING...</Html>}>
               <group>
                 {exp.sceneObjects.map(obj => (
-                  <group 
-                    key={obj.id}
-                    position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]}
-                    rotation={[THREE.MathUtils.degToRad(obj.transform.rotation.x), THREE.MathUtils.degToRad(obj.transform.rotation.y), THREE.MathUtils.degToRad(obj.transform.rotation.z)]}
-                    scale={[obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z]}
-                    onClick={(e) => { e.stopPropagation(); setSelectedObjectId(obj.id); }}
-                  >
+                  <group key={obj.id} position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]} rotation={[THREE.MathUtils.degToRad(obj.transform.rotation.x), THREE.MathUtils.degToRad(obj.transform.rotation.y), THREE.MathUtils.degToRad(obj.transform.rotation.z)]} scale={[obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z]} onClick={(e) => { e.stopPropagation(); setSelectedObjectId(obj.id); }}>
                     <ModelInstance obj={obj} />
-                    {selectedObjectId === obj.id && (
-                      <mesh>
-                        <boxGeometry args={[1.25, 1.25, 1.25]} />
-                        <meshBasicMaterial color="#3b82f6" wireframe transparent opacity={0.3} />
-                      </mesh>
-                    )}
+                    {selectedObjectId === obj.id && <mesh><boxGeometry args={[1.5, 1.5, 1.5]} /><meshBasicMaterial color="#3b82f6" wireframe transparent opacity={0.3} /></mesh>}
                   </group>
                 ))}
               </group>
               <GroundPlane trackingType={exp.trackingType} targetImage={exp.assets.targetImage} theme={theme} />
-              <ContactShadows opacity={theme === 'dark' ? 0.5 : 0.2} scale={25} blur={3} far={20} color="#000" />
-              <Suspense fallback={<Sky sunPosition={[10, 20, 10]} />}>
-                <Environment preset="warehouse" />
-              </Suspense>
-              <gridHelper 
-                args={[80, 160, themeClasses.gridColor, themeClasses.gridCenterColor]} 
-                position={[0, -0.02, 0]} 
-              />
+              <Environment preset="city" />
+              <gridHelper args={[80, 160, themeClasses.gridColor, themeClasses.gridCenterColor]} position={[0, -0.02, 0]} />
             </Suspense>
           </Canvas>
         </div>
       </div>
 
-      {/* Right Sidebar - Logic Engine */}
+      {/* Control Sidebar */}
       <div className={`w-80 border-l ${themeClasses.border} ${themeClasses.panel} flex flex-col shrink-0 overflow-y-auto custom-scrollbar shadow-2xl z-20`}>
         {selectedObject ? (
-          <div className="p-8 space-y-12 animate-slide-in-right">
+          <div className="p-10 space-y-12 animate-slide-in-right">
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Identity Descriptor</span>
-                <span className="text-[8px] font-mono opacity-30">UID: {selectedObject.id}</span>
-              </div>
-              <input 
-                value={selectedObject.name}
-                onChange={e => updateObjectProperty(selectedObject.id, 'name', e.target.value)}
-                className={`w-full ${themeClasses.input} border ${themeClasses.border} rounded-2xl px-5 py-4 text-xs outline-none focus:border-blue-500/50 transition-all font-bold tracking-tight shadow-sm`}
-              />
+              <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Identity</span>
+              <input value={selectedObject.name} onChange={e => updateObjectProperty(selectedObject.id, 'name', e.target.value)} className={`w-full ${themeClasses.input} border ${themeClasses.border} rounded-2xl px-6 py-4 text-xs outline-none focus:border-blue-500 font-bold`} />
             </div>
-
             <div className="space-y-10">
-              <div className="flex justify-between items-center px-1">
-                 <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Spatial Geometry</span>
-                 <button onClick={() => {
-                   updateObjectProperty(selectedObject.id, 'transform.position', { x: 0, y: 0, z: 0 });
-                   updateObjectProperty(selectedObject.id, 'transform.rotation', { x: 0, y: 0, z: 0 });
-                   updateObjectProperty(selectedObject.id, 'transform.scale', { x: 1, y: 1, z: 1 });
-                   addToast("Object Transform Reset", "info");
-                 }} className="text-[9px] font-black text-slate-500 hover:text-blue-500 uppercase tracking-[0.2em] transition-colors">Reset</button>
-              </div>
-              
-              {(['position', 'rotation'] as const).map(prop => (
+              <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Spatial Geometry</span>
+              {(['position', 'rotation', 'scale'] as const).map(prop => (
                 <div key={prop} className="space-y-6">
-                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em] mb-3 ml-1">{prop}</p>
+                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em]">{prop}</p>
                    {(['x', 'y', 'z'] as const).map(axis => (
                      <div key={axis} className="space-y-2">
-                        <div className="flex justify-between text-[9px] font-mono uppercase tracking-[0.1em]">
-                           <span className="opacity-40">{axis}</span>
-                           <span className="text-blue-500 font-bold">{selectedObject.transform[prop][axis].toFixed(2)}</span>
-                        </div>
-                        <input 
-                          type="range"
-                          min={prop === 'rotation' ? -180 : -15}
-                          max={prop === 'rotation' ? 180 : 15}
-                          step={prop === 'rotation' ? 1 : 0.05}
-                          value={selectedObject.transform[prop][axis]}
-                          onChange={e => updateObjectProperty(selectedObject.id, `transform.${prop}.${axis}`, parseFloat(e.target.value))}
-                          className="w-full h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600 cursor-pointer hover:accent-blue-400 transition-all"
-                        />
+                        <div className="flex justify-between text-[9px] font-mono text-blue-500 font-bold uppercase"><span>{axis}</span><span>{selectedObject.transform[prop][axis].toFixed(2)}</span></div>
+                        <input type="range" min={prop === 'rotation' ? -180 : -20} max={prop === 'rotation' ? 180 : 20} step={0.05} value={selectedObject.transform[prop][axis]} onChange={e => updateObjectProperty(selectedObject.id, `transform.${prop}.${axis}`, parseFloat(e.target.value))} className="w-full h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600 cursor-pointer" />
                      </div>
                    ))}
                 </div>
               ))}
-
-              <div className="space-y-4">
-                 <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.3em] ml-1">Universal Scale</p>
-                 <div className="flex items-center gap-6 bg-blue-500/5 p-4 rounded-2xl border border-blue-500/10">
-                    <input 
-                      type="range" min={0.01} max={15} step={0.01}
-                      value={selectedObject.transform.scale.x}
-                      onChange={e => {
-                        const val = parseFloat(e.target.value);
-                        updateObjectProperty(selectedObject.id, 'transform.scale.x', val);
-                        updateObjectProperty(selectedObject.id, 'transform.scale.y', val);
-                        updateObjectProperty(selectedObject.id, 'transform.scale.z', val);
-                      }}
-                      className="flex-1 h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600 cursor-pointer"
-                    />
-                    <span className="text-[12px] font-mono text-blue-500 font-black w-10 text-right">{selectedObject.transform.scale.x.toFixed(1)}</span>
-                 </div>
-              </div>
             </div>
-
-            <div className="space-y-6 pt-8 border-t border-white/5">
-              <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Neural Config</span>
-              <div className="space-y-6 px-1">
-                <div className="space-y-2">
-                   <div className="flex justify-between text-[9px] font-mono uppercase tracking-[0.1em] text-blue-500 font-bold">
-                      <span>Exposure</span>
-                      <span>{exp.config.exposure.toFixed(2)}</span>
-                   </div>
-                   <input 
-                    type="range" min={0} max={2} step={0.01} 
-                    value={exp.config.exposure} 
-                    onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, exposure: parseFloat(e.target.value) } }))}
-                    className="w-full h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600"
-                   />
-                </div>
-                
-                <div className="space-y-2">
-                   <div className="flex justify-between text-[9px] font-mono uppercase tracking-[0.1em] text-blue-500 font-bold">
-                      <span>Bloom Intensity</span>
-                      <span>{exp.config.bloomIntensity.toFixed(2)}</span>
-                   </div>
-                   <input 
-                    type="range" min={0} max={5} step={0.01} 
-                    value={exp.config.bloomIntensity} 
-                    onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, bloomIntensity: parseFloat(e.target.value) } }))}
-                    className="w-full h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600"
-                   />
-                </div>
-
-                <div className="space-y-3 pt-2">
-                  {[
-                    { label: 'Bloom Engine', key: 'bloom', icon: '✨' },
-                    { label: 'Kinetic Rotation', key: 'autoRotate', icon: '🔄' },
-                    { label: 'Gesture Capture', key: 'gestureControl', icon: '🤌' },
-                    { label: 'Ghost Calibration', key: 'ghostMode', icon: '👻' }
-                  ].map(opt => (
-                    <label key={opt.key} className="flex items-center justify-between p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10 cursor-pointer hover:bg-blue-500/10 transition-all">
-                      <div className="flex items-center gap-3">
-                        <span className="text-lg">{opt.icon}</span>
-                        <span className="text-[10px] font-black uppercase tracking-tight">{opt.label}</span>
-                      </div>
-                      <div className="relative inline-flex items-center cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={(exp.config as any)[opt.key]} 
-                          onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, [opt.key]: e.target.checked } }))}
-                          className="sr-only peer"
-                        />
-                        <div className="w-8 h-5 bg-slate-700/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shadow-inner"></div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
+            <div className="space-y-6 pt-10 border-t border-white/5">
+              <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Core Logic</span>
+              <div className="space-y-3">
+                {[
+                  { label: 'Bloom FX', key: 'bloom', icon: '✨' },
+                  { label: 'Auto Rotation', key: 'autoRotate', icon: '🔄' },
+                  { label: 'Spatial Gestures', key: 'gestureControl', icon: '🤌' }
+                ].map(opt => (
+                  <label key={opt.key} className="flex items-center justify-between p-5 bg-blue-500/5 rounded-2xl border border-blue-500/10 cursor-pointer hover:bg-blue-500/10 transition-all">
+                    <span className="text-[10px] font-black uppercase tracking-tight">{opt.icon} {opt.label}</span>
+                    <input type="checkbox" checked={(exp.config as any)[opt.key]} onChange={e => setExp(prev => ({ ...prev, updatedAt: Date.now(), config: { ...prev.config, [opt.key]: e.target.checked } }))} className="w-5 h-5 accent-blue-600" />
+                  </label>
+                ))}
               </div>
-            </div>
-
-            <div className="space-y-6 pt-8 border-t border-white/5 pb-16">
-               <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Material Core</span>
-               <div className="grid grid-cols-1 gap-4">
-                 <button 
-                  onClick={() => diffuseInputRef.current?.click()}
-                  className={`w-full py-5 ${themeClasses.bg} border-2 border-dashed ${themeClasses.border} rounded-3xl text-[10px] font-black uppercase tracking-widest hover:border-blue-500/50 transition-all flex items-center justify-center gap-4 shadow-xl active:scale-95`}
-                 >
-                   🎨 {selectedObject.material?.map ? 'Override Map' : 'Assign Diffuse'}
-                 </button>
-                 {selectedObject.material?.map && (
-                   <button 
-                    onClick={() => { updateObjectProperty(selectedObject.id, 'material.map', undefined); addToast("Texture Purged", "info"); }}
-                    className="w-full text-[9px] font-black text-red-500/50 hover:text-red-500 uppercase tracking-widest py-3 transition-colors"
-                   >Purge Active Texture</button>
-                 )}
-               </div>
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-14 text-center text-slate-500 opacity-20">
-            <div className="w-24 h-24 border border-dashed border-white/20 rounded-full flex items-center justify-center mb-10 animate-pulse">
-               <span className="text-5xl">🔭</span>
-            </div>
-            <p className="text-[11px] font-black uppercase tracking-[0.6em] leading-relaxed">Awaiting Sensor Telemetry...</p>
-          </div>
+          <div className="flex-1 flex flex-col items-center justify-center p-14 text-center opacity-20"><span className="text-6xl mb-8">🔭</span><p className="text-[11px] font-black uppercase tracking-[0.6em] leading-relaxed">System Idle<br/>Await Telemetry...</p></div>
         )}
       </div>
 
-      {/* Controller Inputs */}
+      {/* Uploads */}
       <input ref={modelInputRef} type="file" accept=".glb,.gltf" onChange={e => handleFileUpload(e, 'model')} className="hidden" />
       <input ref={targetInputRef} type="file" accept="image/*" onChange={e => handleFileUpload(e, 'target')} className="hidden" />
       <input ref={diffuseInputRef} type="file" accept="image/*" onChange={e => handleFileUpload(e, 'diffuse')} className="hidden" />

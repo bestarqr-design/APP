@@ -49,7 +49,8 @@ export interface ARExperience {
   assets: {
     targetImage?: string; 
     envMap?: string;
-    portalSky?: string; 
+    portalSky?: string;
+    thumbnail?: string;
   };
   config: {
     shadowIntensity: number;
@@ -65,6 +66,7 @@ export interface ARExperience {
     ctaLink: string;
     analyticsId?: string;
   };
+  updatedAt: number;
 }
 
 export interface KalmanState {

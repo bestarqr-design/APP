@@ -5,7 +5,6 @@ import { useGLTF, Environment, ContactShadows, PerspectiveCamera, useTexture, Fl
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { ARExperience, SceneObject } from '../types';
-import { PoseSmoother } from '../utils/kalman';
 
 interface ARViewerProps {
   experience: ARExperience;
@@ -13,125 +12,88 @@ interface ARViewerProps {
   onTrackingStatusChange?: (status: 'searching' | 'found' | 'lost') => void;
 }
 
-const DynamicEnvironment = ({ videoElement }: { videoElement: HTMLVideoElement | null }) => {
-  const texture = useVideoTexture(videoElement as any);
-  
-  if (!videoElement) return null;
-
-  return (
-    <CubeCamera frames={Infinity} resolution={256} near={1} far={1000}>
-      {(textureCube) => (
-        <>
-          <Environment map={textureCube} />
-          {/* Layer 1 is for environment map capture only */}
-          <mesh visible={true} layers={1}>
-            <sphereGeometry args={[10, 64, 64]} />
-            <meshBasicMaterial map={texture} side={THREE.BackSide} />
-          </mesh>
-        </>
-      )}
-    </CubeCamera>
-  );
-};
-
 const ModelInstance = ({ obj, rotationOffset }: { obj: SceneObject, rotationOffset: number }) => {
   const { scene } = useGLTF(obj.url);
-  const clonedScene = useMemo(() => scene.clone(), [scene]);
+  const clonedScene = useMemo(() => {
+    const s = scene.clone();
+    s.traverse((node: any) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+        // Commercial grade material fallback
+        if (node.material.metalness !== undefined) {
+          node.material.metalness = Math.max(node.material.metalness, 0.7);
+          node.material.roughness = Math.min(node.material.roughness, 0.3);
+        }
+      }
+    });
+    return s;
+  }, [scene]);
+
   const diffuseMap = obj.material?.map ? useTexture(obj.material.map) : null;
 
   useEffect(() => {
-    const tiling = obj.material?.tiling || { x: 1, y: 1 };
     if (diffuseMap) {
       diffuseMap.wrapS = diffuseMap.wrapT = THREE.RepeatWrapping;
-      diffuseMap.repeat.set(tiling.x, tiling.y);
+      diffuseMap.repeat.set(obj.material?.tiling.x || 1, obj.material?.tiling.y || 1);
     }
     clonedScene.traverse((node: any) => {
-      if (node.isMesh) {
-        if (diffuseMap) node.material.map = diffuseMap;
-        // Boost metallic look if metallic-ish materials found
-        if (node.material.metalness !== undefined) {
-          node.material.metalness = Math.max(node.material.metalness, 0.8);
-          node.material.roughness = Math.min(node.material.roughness, 0.2);
-        }
+      if (node.isMesh && diffuseMap) {
+        node.material.map = diffuseMap;
         node.material.needsUpdate = true;
       }
     });
   }, [clonedScene, diffuseMap, obj.material?.tiling]);
 
-  return (
-    <primitive 
-      object={clonedScene} 
-      rotation={[0, rotationOffset, 0]}
-    />
-  );
+  return <primitive object={clonedScene} rotation={[0, rotationOffset, 0]} />;
 };
 
 const ARSceneContent: React.FC<{ 
   experience: ARExperience; 
   isTracking: boolean;
-  videoElement: HTMLVideoElement | null;
   onTransformChange: (t: ARExperience['transform']) => void;
-}> = ({ experience, isTracking, videoElement, onTransformChange }) => {
+}> = ({ experience, isTracking, onTransformChange }) => {
   const rootRef = useRef<THREE.Group>(null);
   const { camera, raycaster, size, gl } = useThree();
   const [rotationOffset, setRotationOffset] = useState(experience.transform.rotation.y);
   
-  // Update Renderer Exposure from Config
   useEffect(() => {
-    gl.toneMappingExposure = experience.config.exposure;
+    gl.toneMappingExposure = experience.config.exposure || 1.0;
   }, [experience.config.exposure, gl]);
 
-  // Gesture State
   const pointers = useRef(new Map<number, THREE.Vector2>());
   const initialPinchDist = useRef<number>(0);
   const initialPinchScale = useRef<number>(experience.transform.scale.x);
-  const initialPinchAngle = useRef<number>(0);
-  const initialRotation = useRef<number>(0);
   const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
   const intersectionPoint = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(() => {
     if (!rootRef.current) return;
+    const visibility = isTracking || experience.config.ghostMode;
+    rootRef.current.visible = visibility;
     
-    // Tracking/Ghost Mode Logic
-    rootRef.current.visible = isTracking || experience.config.ghostMode;
-    if (rootRef.current.visible) {
-      rootRef.current.traverse((obj: any) => {
-        if (obj.isMesh && obj.material) {
-          obj.material.transparent = true;
-          obj.material.opacity = THREE.MathUtils.lerp(obj.material.opacity || 1, isTracking ? 1.0 : 0.2, 0.1);
+    if (visibility) {
+      rootRef.current.traverse((node: any) => {
+        if (node.isMesh && node.material) {
+          node.material.transparent = true;
+          node.material.opacity = THREE.MathUtils.lerp(node.material.opacity || 1, isTracking ? 1.0 : 0.25, 0.1);
         }
       });
     }
 
     if (experience.config.autoRotate && pointers.current.size === 0) {
-      rootRef.current.rotation.y += 0.01;
+      rootRef.current.rotation.y += 0.005;
     }
   });
-
-  const getPinchData = () => {
-    const pts = Array.from(pointers.current.values());
-    if (pts.length < 2) return null;
-    const dx = pts[0].x - pts[1].x;
-    const dy = pts[0].y - pts[1].y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const angle = Math.atan2(dy, dx);
-    return { dist, angle };
-  };
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!experience.config.gestureControl) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     pointers.current.set(e.pointerId, new THREE.Vector2(e.clientX, e.clientY));
-
     if (pointers.current.size === 2) {
-      const data = getPinchData();
-      if (data) {
-        initialPinchDist.current = data.dist;
-        initialPinchScale.current = rootRef.current?.scale.x || 1;
-        initialPinchAngle.current = data.angle;
-        initialRotation.current = rotationOffset;
-      }
+      const pts = Array.from(pointers.current.values());
+      initialPinchDist.current = pts[0].distanceTo(pts[1]);
+      initialPinchScale.current = rootRef.current?.scale.x || 1;
     }
   };
 
@@ -140,33 +102,22 @@ const ARSceneContent: React.FC<{
     pointers.current.set(e.pointerId, new THREE.Vector2(e.clientX, e.clientY));
 
     if (pointers.current.size === 1) {
-      // Translation (Single Finger Drag on XZ Plane)
-      const mouse = new THREE.Vector2(
-        (e.clientX / size.width) * 2 - 1,
-        -(e.clientY / size.height) * 2 + 1
-      );
+      const mouse = new THREE.Vector2((e.clientX / size.width) * 2 - 1, -(e.clientY / size.height) * 2 + 1);
       raycaster.setFromCamera(mouse, camera);
       if (raycaster.ray.intersectPlane(dragPlane, intersectionPoint)) {
         rootRef.current.position.copy(intersectionPoint);
       }
     } else if (pointers.current.size === 2) {
-      // Scale & Rotate (Pinch/Twist)
-      const data = getPinchData();
-      if (data) {
-        const scaleFactor = data.dist / initialPinchDist.current;
-        const newScale = Math.max(0.1, Math.min(10, initialPinchScale.current * scaleFactor));
-        rootRef.current.scale.set(newScale, newScale, newScale);
-
-        const angleDelta = data.angle - initialPinchAngle.current;
-        setRotationOffset(initialRotation.current - angleDelta);
-      }
+      const pts = Array.from(pointers.current.values());
+      const dist = pts[0].distanceTo(pts[1]);
+      const newScale = Math.max(0.05, Math.min(20, initialPinchScale.current * (dist / initialPinchDist.current)));
+      rootRef.current.scale.setScalar(newScale);
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
     if (pointers.current.size === 0 && rootRef.current) {
-      // Save current state back to experience
       onTransformChange({
         position: { x: rootRef.current.position.x, y: rootRef.current.position.y, z: rootRef.current.position.z },
         rotation: { x: 0, y: THREE.MathUtils.radToDeg(rotationOffset), z: 0 },
@@ -177,183 +128,134 @@ const ARSceneContent: React.FC<{
 
   return (
     <>
-      <DynamicEnvironment videoElement={videoElement} />
-      
       <group 
         ref={rootRef} 
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
+        onPointerDown={handlePointerDown} 
+        onPointerMove={handlePointerMove} 
         onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
         position={[experience.transform.position.x, experience.transform.position.y, experience.transform.position.z]}
         scale={[experience.transform.scale.x, experience.transform.scale.y, experience.transform.scale.z]}
       >
         {experience.sceneObjects.map(obj => (
           <group 
-            key={obj.id}
-            position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]}
-            rotation={[
-              THREE.MathUtils.degToRad(obj.transform.rotation.x), 
-              THREE.MathUtils.degToRad(obj.transform.rotation.y), 
-              THREE.MathUtils.degToRad(obj.transform.rotation.z)
-            ]}
+            key={obj.id} 
+            position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]} 
+            rotation={[THREE.MathUtils.degToRad(obj.transform.rotation.x), THREE.MathUtils.degToRad(obj.transform.rotation.y), THREE.MathUtils.degToRad(obj.transform.rotation.z)]}
             scale={[obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z]}
           >
             <Suspense fallback={null}>
-              <Float 
-                speed={obj.animation.autoPlay ? 2.5 : 0} 
-                rotationIntensity={0.25} 
-                floatIntensity={0.25}
-              >
+              <Float speed={obj.animation.autoPlay ? 1.5 : 0} rotationIntensity={0.3} floatIntensity={0.5}>
                 <ModelInstance obj={obj} rotationOffset={rotationOffset} />
               </Float>
             </Suspense>
           </group>
         ))}
-        <ContactShadows opacity={experience.config.shadowIntensity} scale={20} blur={3} far={15} color="#000" />
+        <ContactShadows opacity={experience.config.shadowIntensity} scale={30} blur={2.5} far={20} color="#000" />
       </group>
-
-      <EffectComposer>
-        {experience.config.bloom && (
-          <Bloom 
-            intensity={experience.config.bloomIntensity} 
-            luminanceThreshold={0.5} 
-            luminanceSmoothing={0.025} 
-          />
-        )}
-      </EffectComposer>
+      <EffectComposer>{experience.config.bloom && <Bloom intensity={experience.config.bloomIntensity} luminanceThreshold={0.7} />}</EffectComposer>
     </>
   );
 };
 
 export const ARViewer: React.FC<ARViewerProps> = ({ experience, onUpdate, onTrackingStatusChange }) => {
   const [isTracking, setIsTracking] = useState(false);
+  const [initStage, setInitStage] = useState(0); // 0: Searching, 1: Surface Found, 2: Anchored
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    const setupCamera = async () => {
+    const setup = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-          audio: false 
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play();
-            setVideoElement(videoRef.current);
-          };
+          videoRef.current.play();
         }
-        // Simulation of high-fidelity spatial anchoring
-        const timer = setTimeout(() => {
+        // Simulated SLAM Initialization sequence
+        setTimeout(() => setInitStage(1), 1500);
+        setTimeout(() => {
+          setInitStage(2);
           setIsTracking(true);
           onTrackingStatusChange?.('found');
-        }, 3000);
-        return () => clearTimeout(timer);
+        }, 4000);
       } catch (err) {
-        setCameraError("Hardware Conflict: Camera stream unreachable.");
+        setCameraError("Hardware Access Denied: Check camera permissions.");
       }
     };
-    setupCamera();
+    setup();
     return () => {
-      if (videoRef.current?.srcObject) {
-        (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-      }
+      if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
     };
   }, []);
 
   return (
-    <div className="relative w-full h-full bg-black overflow-hidden font-sans">
-      <video 
-        ref={videoRef} 
-        autoPlay 
-        playsInline 
-        muted 
-        className="absolute inset-0 w-full h-full object-cover z-0 brightness-[0.8] contrast-[1.05]" 
-      />
+    <div className="relative w-full h-full bg-black overflow-hidden font-sans select-none touch-none">
+      <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover z-0 brightness-[0.85] contrast-[1.1]" />
       
-      <div className="absolute inset-0 z-10">
+      <div className="absolute inset-0 z-10 pointer-events-auto">
         <Canvas shadows gl={{ antialias: true, alpha: true }}>
-          <PerspectiveCamera makeDefault position={[0, 2, 8]} fov={45} />
+          <PerspectiveCamera makeDefault position={[0, 4, 10]} fov={45} />
           <ambientLight intensity={1.5} />
-          <directionalLight position={[10, 15, 10]} intensity={2.5} castShadow />
-          <pointLight position={[-10, 5, -10]} intensity={1.0} color="#3b82f6" />
-          <ARSceneContent 
-            experience={experience} 
-            isTracking={isTracking} 
-            videoElement={videoElement}
-            onTransformChange={onUpdate || (() => {})}
-          />
-          <Suspense fallback={null}>
-            <Environment preset="warehouse" />
-          </Suspense>
+          <directionalLight position={[10, 20, 10]} intensity={3.5} castShadow shadow-mapSize={[2048, 2048]} />
+          <pointLight position={[-10, 5, -10]} intensity={2.0} color="#3b82f6" />
+          <ARSceneContent experience={experience} isTracking={isTracking} onTransformChange={onUpdate || (() => {})} />
+          <Suspense fallback={null}><Environment preset="city" /></Suspense>
+          <gridHelper args={[60, 120, '#ffffff', '#1a1b1e']} position={[0, -0.05, 0]} visible={isTracking} />
         </Canvas>
       </div>
 
-      {/* Persistent UI HUD */}
-      <div className="absolute inset-0 pointer-events-none z-20 p-8 sm:p-12">
+      {/* Industrial HUD */}
+      <div className="absolute inset-0 pointer-events-none z-20 p-10 flex flex-col justify-between">
         <div className="flex justify-between items-start">
-           <div className="p-6 bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-2xl">
-              <div className="flex items-center gap-5">
-                 <div className="w-14 h-14 bg-blue-600 rounded-[1.5rem] flex items-center justify-center font-black text-white text-base shadow-2xl shadow-blue-500/40">L</div>
+           <div className="p-8 bg-black/50 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-2xl min-w-[320px] animate-slide-in-left">
+              <div className="flex items-center gap-6">
+                 <div className="w-16 h-16 bg-blue-600 rounded-[1.5rem] flex items-center justify-center font-black text-white text-xl shadow-[0_0_30px_#3b82f644]">L</div>
                  <div>
-                    <h1 className="text-[12px] font-black uppercase tracking-[0.5em] text-white">{experience.name}</h1>
-                    <div className="flex items-center gap-2 mt-2">
-                      <div className={`w-2 h-2 rounded-full ${isTracking ? 'bg-green-500 shadow-[0_0_12px_#22c55e]' : 'bg-red-500 animate-pulse'}`}></div>
-                      <span className="text-[8px] font-mono text-slate-300 uppercase tracking-widest">
-                        {isTracking ? `ACTIVE: ${experience.trackingType}` : 'SEARCHING...'}
-                      </span>
+                    <h1 className="text-[13px] font-black uppercase tracking-[0.6em] text-white leading-tight">{experience.name}</h1>
+                    <div className="flex items-center gap-2.5 mt-2.5">
+                      <div className={`w-2.5 h-2.5 rounded-full ${isTracking ? 'bg-green-500 shadow-[0_0_15px_#22c55e]' : 'bg-red-500 animate-pulse'}`}></div>
+                      <span className="text-[9px] font-mono text-slate-300 uppercase tracking-widest">{isTracking ? 'Spatial Integrity: Lock' : 'Signal Hunting...'}</span>
                     </div>
                  </div>
               </div>
            </div>
+           
+           <div className="p-6 bg-black/40 backdrop-blur-3xl border border-white/5 rounded-3xl text-right animate-slide-in-right">
+              <p className="text-[8px] font-black text-blue-400 uppercase tracking-[0.4em]">Environmental Data</p>
+              <p className="text-[14px] font-mono text-white mt-1">LAT: 37.77 • LON: -122.41</p>
+           </div>
         </div>
 
-        {experience.config.gestureControl && isTracking && (
-          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4">
-             <div className="px-10 py-5 bg-white/10 backdrop-blur-3xl border border-white/20 rounded-full text-[9px] font-black uppercase tracking-[0.4em] text-white shadow-2xl animate-in fade-in slide-in-from-bottom-5 duration-1000">
-                Gestures Enabled: Move • Scale • Rotate
-             </div>
-             <div className="flex gap-4 opacity-40">
-                <span className="text-xl">☝️</span>
-                <span className="text-xl">✌️</span>
-             </div>
+        {/* Initialization Screen */}
+        {!isTracking && !cameraError && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/60 backdrop-blur-3xl animate-fade-in">
+            <div className="relative mb-16">
+              <div className={`w-40 h-40 border-4 border-dashed border-blue-500/30 rounded-[4rem] animate-spin-slow transition-transform duration-1000 ${initStage > 0 ? 'scale-125 border-green-500/40' : ''}`}></div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                 <div className={`w-6 h-6 rounded-full shadow-[0_0_50px_#3b82f6] animate-ping ${initStage > 0 ? 'bg-green-500 shadow-green-500' : 'bg-blue-600'}`}></div>
+              </div>
+            </div>
+            <h2 className="text-white text-[12px] font-black uppercase tracking-[1.2em] mb-6 text-center">
+              {initStage === 0 ? 'Mapping Spatial Geometry' : 'Anchoring Digital Twin'}
+            </h2>
+            <div className="w-64 h-1 bg-white/10 rounded-full overflow-hidden">
+               <div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: `${(initStage + 1) * 33}%` }}></div>
+            </div>
+          </div>
+        )}
+
+        {cameraError && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#050608] p-20 text-center">
+            <div className="max-w-md space-y-12">
+              <div className="text-8xl mb-12">📡</div>
+              <h2 className="text-white text-[14px] font-black uppercase tracking-[0.5em] leading-loose">{cameraError}</h2>
+              <button onClick={() => window.location.reload()} className="w-full py-6 bg-blue-600 text-white text-[11px] font-black uppercase tracking-[0.3em] rounded-3xl shadow-3xl hover:bg-blue-500 active:scale-95 transition-all">Reconnect Sensors</button>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Alignment Screen */}
-      {!isTracking && !cameraError && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/50 backdrop-blur-xl">
-          <div className="relative mb-12">
-            <div className="w-32 h-32 border-2 border-dashed border-blue-500/40 rounded-[3rem] animate-spin-slow"></div>
-            <div className="absolute inset-0 flex items-center justify-center">
-               <div className="w-4 h-4 bg-blue-600 rounded-full shadow-[0_0_40px_#3b82f6] animate-ping"></div>
-            </div>
-          </div>
-          <h2 className="text-white text-[10px] font-black uppercase tracking-[1em] mb-4">Initializing Spatial Grid</h2>
-          <p className="text-slate-400 text-[8px] uppercase tracking-[0.2em] font-bold text-center leading-loose px-12 max-w-xs">
-            Scan your environment to anchor the digital twin.
-          </p>
-        </div>
-      )}
-
-      {cameraError && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#050608] p-16 text-center">
-          <div className="max-w-sm space-y-10">
-            <div className="text-6xl mb-10">⚠️</div>
-            <h2 className="text-white text-[12px] font-black uppercase tracking-[0.4em] leading-loose">{cameraError}</h2>
-            <button onClick={() => window.location.reload()} className="w-full py-5 bg-blue-600 text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-3xl shadow-2xl shadow-blue-500/40">Retry Connection</button>
-          </div>
-        </div>
-      )}
-
-      <style>{`
-        .animate-spin-slow { animation: spin 15s linear infinite; }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      `}</style>
+      <style>{`.animate-spin-slow { animation: spin 12s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };
