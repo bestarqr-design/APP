@@ -10,17 +10,11 @@ export interface Vector3 {
 export interface AnimationConfig {
   autoPlay: boolean;
   trigger: 'none' | 'tap' | 'proximity';
-  clipName?: string;
 }
 
 export interface MaterialConfig {
   map?: string;
-  normalMap?: string;
-  roughnessMap?: string;
-  tiling: {
-    x: number;
-    y: number;
-  };
+  tiling: { x: number; y: number };
 }
 
 export interface SceneObject {
@@ -36,6 +30,13 @@ export interface SceneObject {
   material?: MaterialConfig;
 }
 
+export interface VersionSnapshot {
+  id: string;
+  timestamp: number;
+  note: string;
+  data: string; // JSON string of the experience state
+}
+
 export interface ARExperience {
   id: string;
   name: string;
@@ -48,8 +49,6 @@ export interface ARExperience {
   };
   assets: {
     targetImage?: string; 
-    envMap?: string;
-    portalSky?: string;
     thumbnail?: string;
   };
   config: {
@@ -64,12 +63,7 @@ export interface ARExperience {
   businessData: {
     businessName: string;
     ctaLink: string;
-    analyticsId?: string;
   };
+  versions: VersionSnapshot[];
   updatedAt: number;
-}
-
-export interface KalmanState {
-  x: number[];
-  P: number[][];
 }

@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState, Suspense, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { useGLTF, Environment, ContactShadows, PerspectiveCamera, useTexture, Float, Sky, CubeCamera, useVideoTexture } from '@react-three/drei';
+import { useGLTF, Environment, ContactShadows, PerspectiveCamera, useTexture, Float, Sky, CubeCamera, useVideoTexture, Html } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { ARExperience, SceneObject } from '../types';
@@ -199,7 +199,9 @@ export const ARViewer: React.FC<ARViewerProps> = ({ experience, onUpdate, onTrac
           <directionalLight position={[10, 20, 10]} intensity={3.5} castShadow shadow-mapSize={[2048, 2048]} />
           <pointLight position={[-10, 5, -10]} intensity={2.0} color="#3b82f6" />
           <ARSceneContent experience={experience} isTracking={isTracking} onTransformChange={onUpdate || (() => {})} />
-          <Suspense fallback={null}><Environment preset="city" /></Suspense>
+          <Suspense fallback={null}>
+            <Environment preset="warehouse" />
+          </Suspense>
           <gridHelper args={[60, 120, '#ffffff', '#1a1b1e']} position={[0, -0.05, 0]} visible={isTracking} />
         </Canvas>
       </div>

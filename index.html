@@ -4,70 +4,45 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>LuminaAR | Professional WebAR</title>
+    <meta name="theme-color" content="#000000" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Lumina Pro | Enterprise WebAR</title>
+    
+    <link rel="manifest" href="data:application/manifest+json;base64,ewogICJuYW1lIjogIkx1bWluYSBQUk8iLAogICJzaG9ydF9uYW1lIjogIkx1bWluYSIsCiAgInN0YXJ0X3VybCI6ICIuIiwKICAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwKICAiYmFja2dyb3VuZF9jb2xvciI6ICIjMDAwMDAwIiwKICAidGhlbWVfY29sb3IiOiAiIzAwMDAwMCIsCiAgImljb25zIjogWwogICAgewogICAgICAic3JjIjogImh0dHBzOi8vY2RuLWljb25zLXBuZy5mbGF0aWNvbi5jb20vNTEyLzI1ODQvMjU4NDY4OC5wbmciLAogICAgICAic2l6ZXMiOiAiNTEyeDUxMiIsCiAgICAgICJ0eXBlIjogImltYWdlL3BuZyIKICAgIH0KICBdCn0=" />
+
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      body, html, #root {
-        margin: 0;
-        padding: 0;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        background-color: #000;
-      }
-      /* Prevent Safari elastic scroll */
+      body, html, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; }
       body { position: fixed; }
-      
-      /* Custom Scrollbar for better UX in Dashboard */
-      .custom-scrollbar::-webkit-scrollbar {
-        width: 4px;
-      }
-      .custom-scrollbar::-webkit-scrollbar-track {
-        background: rgba(15, 23, 42, 0.1);
-      }
-      .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(51, 65, 85, 0.5);
-        border-radius: 10px;
-      }
-      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: rgba(59, 130, 246, 0.5);
-      }
-
-      /* Animation Keyframes */
+      .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0); }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(59, 130, 246, 0.4); border-radius: 10px; }
+      @keyframes slideInRight { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+      .animate-slide-in-right { animation: slideInRight 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
       @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes slideInRight { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-      @keyframes slideInLeft { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-      @keyframes slideInUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-      @keyframes scaleUp { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-
-      .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
-      .animate-slide-in-right { animation: slideInRight 0.4s ease-out forwards; }
-      .animate-slide-in-left { animation: slideInLeft 0.4s ease-out forwards; }
-      .animate-slide-in-up { animation: slideInUp 0.4s ease-out forwards; }
-      .animate-scale-up { animation: scaleUp 0.3s ease-out forwards; }
+      .animate-fade-in { animation: fadeIn 0.4s ease-out; }
     </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-    "react": "https://esm.sh/react@18.3.1",
-    "react/": "https://esm.sh/react@18.3.1/",
-    "react-dom": "https://esm.sh/react-dom@18.3.1",
-    "react-dom/": "https://esm.sh/react-dom@18.3.1/",
-    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-    "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.11?external=react,react-dom,three",
-    "@react-three/drei": "https://esm.sh/@react-three/drei@9.88.16?external=react,react-dom,three,@react-three/fiber",
-    "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
-    "postprocessing": "https://esm.sh/postprocessing@6.34.1",
-    "mind-ar-js": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js",
-    "@google/genai": "https://esm.sh/@google/genai@1.3.0",
-    "jszip": "https://esm.sh/jszip@3.10.1"
-  }
-}
-</script>
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "react": "https://esm.sh/react@18.3.1",
+        "react-dom": "https://esm.sh/react-dom@18.3.1",
+        "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+        "react/": "https://esm.sh/react@18.3.1/",
+        "react-dom/": "https://esm.sh/react-dom@18.3.1/",
+        "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.11?external=react,react-dom,three",
+        "@react-three/drei": "https://esm.sh/@react-three/drei@9.88.16?external=react,react-dom,three,@react-three/fiber",
+        "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
+        "postprocessing": "https://esm.sh/postprocessing@6.34.1",
+        "@google/genai": "https://esm.sh/@google/genai@1.3.0",
+        "jszip": "https://esm.sh/jszip@3.10.1"
+      }
+    }
+    </script>
   </body>
 </html>
