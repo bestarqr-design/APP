@@ -3,7 +3,8 @@ import React, { useState, useRef, Suspense, useEffect, useMemo } from 'react';
 import { ARExperience, TrackingType, Vector3, SceneObject } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
 import { Canvas } from '@react-three/fiber';
-import { Environment, ContactShadows, PerspectiveCamera, OrbitControls, Gltf, Sky, useTexture } from '@react-three/drei';
+// Fixed: Added Html to the import list from @react-three/drei
+import { Environment, ContactShadows, PerspectiveCamera, OrbitControls, Gltf, Sky, useTexture, Html } from '@react-three/drei';
 import * as THREE from 'three';
 
 interface DashboardProps {
@@ -13,12 +14,13 @@ interface DashboardProps {
   onPreview: (exp: ARExperience) => void;
 }
 
-const DEFAULT_MODEL = 'https://vazxmixjsiawhamofees.supabase.co/storage/v1/object/public/models/cup-tea/model.gltf';
+// Updated to a highly reliable public CDN asset
+const DEFAULT_MODEL = 'https://modelviewer.dev/shared-assets/models/Astronaut.glb';
 
 const createEmptyObject = (url: string = DEFAULT_MODEL, name: string = 'New Object'): SceneObject => ({
   id: `obj-${Math.random().toString(36).substr(2, 5)}`,
-  name,
-  url,
+  name: String(name),
+  url: String(url),
   transform: {
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
@@ -43,7 +45,6 @@ const createEmptyExperience = (): ARExperience => ({
 });
 
 const GroundPlane = ({ trackingType, targetImage }: { trackingType: string, targetImage?: string }) => {
-  // Only load texture if it's an image tracking type and image exists
   const texture = (trackingType === 'image' && targetImage) ? useTexture(targetImage) : null;
   
   return (
@@ -100,7 +101,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
     reader.onload = (event) => {
       const result = event.target?.result as string;
       if (type === 'model') {
-        const newObj = createEmptyObject(result, file.name);
+        const newObj = createEmptyObject(result, String(file.name));
         setExp(prev => ({ ...prev, sceneObjects: [...prev.sceneObjects, newObj] }));
         setSelectedObjectId(newObj.id);
       } else {
@@ -115,12 +116,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
     if (!aiPrompt) return;
     setAiLoading(true);
     try {
+      // Re-initialize for each request to ensure up-to-date config
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Create an AR scene layout for: "${aiPrompt}". 
-        Suggest the tracking mode (surface, face, or image), and a list of 3D entities with positions (x,y,z) and scales. 
-        Return strictly valid JSON.`,
+        contents: `Create an AR scene layout for: "${aiPrompt}". Suggest the tracking mode (surface, face, or image), and a list of 3D entities with positions (x,y,z) and scales. Return strictly valid JSON.`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -148,7 +148,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       const data = JSON.parse(response.text || '{}');
       if (data.entities) {
         const newObjects = data.entities.map((ent: any) => ({
-          ...createEmptyObject(DEFAULT_MODEL, String(ent.name)),
+          ...createEmptyObject(DEFAULT_MODEL, String(ent.name || 'New Entity')),
           transform: {
             position: ent.position || { x: 0, y: 0, z: 0 },
             rotation: { x: 0, y: 0, z: 0 },
@@ -191,8 +191,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
               className={`p-3 rounded-xl border cursor-pointer group transition-all ${exp.id === item.id ? 'bg-blue-600/10 border-blue-500/50' : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'}`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold truncate pr-2">{String(item.name)}</span>
-                <span className="text-[7px] font-mono text-slate-500">{String(item.trackingType)}</span>
+                <span className="text-[10px] font-bold truncate pr-2">{String(item.name || 'Untitled')}</span>
+                <span className="text-[7px] font-mono text-slate-500">{String(item.trackingType).toUpperCase()}</span>
               </div>
               <div className="mt-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button onClick={(e) => { e.stopPropagation(); onDelete(item.id); }} className="text-[7px] font-bold text-red-500/70 hover:text-red-500">DELETE</button>
@@ -228,7 +228,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                       className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${selectedObjectId === obj.id ? 'bg-blue-600/10 border-blue-500/50 text-white' : 'bg-slate-900/40 border-slate-800 text-slate-500 hover:border-slate-700'}`}
                     >
                       <div className="w-5 h-5 bg-slate-800 rounded flex items-center justify-center text-[10px]">📦</div>
-                      <span className="text-[10px] font-bold truncate flex-1">{String(obj.name)}</span>
+                      <span className="text-[10px] font-bold truncate flex-1">{String(obj.name || 'Entity')}</span>
                       <button onClick={(e) => { e.stopPropagation(); setExp(prev => ({ ...prev, sceneObjects: prev.sceneObjects.filter(o => o.id !== obj.id) })); }} className="hover:text-red-400 text-xs">✕</button>
                     </div>
                   ))}
@@ -258,7 +258,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                       {(['x', 'y', 'z'] as const).map(axis => (
                         <div key={`${prop}-${axis}`} className="space-y-1">
                           <div className="flex justify-between text-[7px] font-mono text-slate-500 uppercase">
-                            <span>{axis}</span>
+                            <span>{String(axis)}</span>
                             <span>{Number(selectedObject.transform[prop][axis]).toFixed(2)}</span>
                           </div>
                           <input 
@@ -288,7 +288,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                       className={`p-4 rounded-xl border text-[10px] font-black uppercase transition-all flex flex-col items-center gap-2 ${exp.trackingType === mode ? 'bg-blue-600 border-blue-400 shadow-xl shadow-blue-900/40' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700'}`}
                     >
                       <span className="text-xl">{mode === 'image' ? '📸' : mode === 'surface' ? '🏠' : mode === 'face' ? '👤' : '🌀'}</span>
-                      <span className="tracking-tighter">{String(mode)}</span>
+                      <span className="tracking-tighter">{String(mode).toUpperCase()}</span>
                     </button>
                   ))}
                 </div>
@@ -324,7 +324,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                   <span className="text-[10px] font-bold text-slate-300 uppercase">Auto-Play Animations</span>
                   <input 
                     type="checkbox" 
-                    checked={selectedObject.animation.autoPlay} 
+                    checked={!!selectedObject.animation.autoPlay} 
                     onChange={e => updateObjectProperty(selectedObject.id, 'animation.autoPlay', e.target.checked)}
                     className="w-4 h-4 rounded bg-slate-950 border-slate-700 text-blue-600"
                   />
@@ -378,8 +378,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       </div>
 
       <div className="flex-1 bg-[#050505] relative flex items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 opacity-20 z-0" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #1e293b 1px, transparent 0)', backgroundSize: '40px 40px' }} />
-
         <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}>
           <PerspectiveCamera makeDefault position={[5, 4, 6]} fov={45} />
           <OrbitControls makeDefault enableDamping dampingFactor={0.05} />
@@ -387,7 +385,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           <spotLight position={[10, 15, 10]} angle={0.2} penumbra={1} intensity={3} castShadow />
           <Environment preset="city" />
 
-          <Suspense fallback={null}>
+          <Suspense fallback={<Html center className="text-white text-[8px] font-mono animate-pulse">LOADING_ASSETS...</Html>}>
             {exp.sceneObjects.map(obj => (
               <group 
                 key={obj.id} 
@@ -420,21 +418,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
             <h1 className="text-xl font-black tracking-tighter uppercase leading-none">{String(exp.name || 'UNNAMED_SPACE')}</h1>
             <div className="flex items-center gap-3 mt-3">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-              <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">{String(exp.trackingType)} core ready</span>
+              <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">{String(exp.trackingType).toUpperCase()} CORE READY</span>
             </div>
-          </div>
-          <div className="flex gap-2">
-            {exp.sceneObjects.map(obj => (
-              <div key={obj.id} className={`w-2 h-2 rounded-full ${selectedObjectId === obj.id ? 'bg-blue-500' : 'bg-slate-800'}`}></div>
-            ))}
           </div>
         </div>
 
         <div className="absolute bottom-10 right-10 flex gap-4">
            <div className="bg-black/60 backdrop-blur-xl border border-white/5 p-4 rounded-2xl flex items-center gap-4 text-[9px] font-black uppercase tracking-widest text-slate-500">
-             <span>Entities: {exp.sceneObjects.length}</span>
+             <span>ENTITIES: {exp.sceneObjects.length}</span>
              <div className="w-px h-3 bg-white/10"></div>
-             <span>GPU Memory: Optimized</span>
+             <span>GPU MEMORY: OPTIMIZED</span>
            </div>
         </div>
       </div>
