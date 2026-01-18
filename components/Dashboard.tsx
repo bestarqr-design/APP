@@ -1,9 +1,9 @@
 
-import React, { useState, useRef, Suspense, useEffect } from 'react';
+import React, { useState, useRef, Suspense, useEffect, useMemo } from 'react';
 import { ARExperience, TrackingType, Vector3, SceneObject } from '../types';
 import { GoogleGenAI, Type } from "@google/genai";
 import { Canvas } from '@react-three/fiber';
-import { useGLTF, Environment, ContactShadows, PerspectiveCamera, OrbitControls, Gltf, Float, Sky } from '@react-three/drei';
+import { Environment, ContactShadows, PerspectiveCamera, OrbitControls, Gltf, Sky, useTexture } from '@react-three/drei';
 import * as THREE from 'three';
 
 interface DashboardProps {
@@ -42,6 +42,24 @@ const createEmptyExperience = (): ARExperience => ({
   businessData: { businessName: 'Lumina Tech', ctaLink: 'https://example.com' }
 });
 
+const GroundPlane = ({ trackingType, targetImage }: { trackingType: string, targetImage?: string }) => {
+  // Only load texture if it's an image tracking type and image exists
+  const texture = (trackingType === 'image' && targetImage) ? useTexture(targetImage) : null;
+  
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
+      <planeGeometry args={[12, 12]} />
+      <meshStandardMaterial 
+        map={texture}
+        color={texture ? 'white' : '#0a0a0c'} 
+        transparent 
+        opacity={texture ? 1 : 0.8}
+        roughness={1}
+      />
+    </mesh>
+  );
+};
+
 export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDelete, onPreview }) => {
   const [exp, setExp] = useState<ARExperience>(createEmptyExperience());
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(exp.sceneObjects[0]?.id || null);
@@ -52,7 +70,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
   const modelInputRef = useRef<HTMLInputElement>(null);
   const targetInputRef = useRef<HTMLInputElement>(null);
 
-  const selectedObject = exp.sceneObjects.find(o => o.id === selectedObjectId);
+  const selectedObject = useMemo(() => 
+    exp.sceneObjects.find(o => o.id === selectedObjectId), 
+    [exp.sceneObjects, selectedObjectId]
+  );
 
   const updateObjectProperty = (objId: string, path: string, value: any) => {
     setExp(prev => ({
@@ -127,7 +148,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       const data = JSON.parse(response.text || '{}');
       if (data.entities) {
         const newObjects = data.entities.map((ent: any) => ({
-          ...createEmptyObject(DEFAULT_MODEL, ent.name),
+          ...createEmptyObject(DEFAULT_MODEL, String(ent.name)),
           transform: {
             position: ent.position || { x: 0, y: 0, z: 0 },
             rotation: { x: 0, y: 0, z: 0 },
@@ -139,7 +160,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           trackingType: (data.tracking as TrackingType) || prev.trackingType,
           sceneObjects: newObjects 
         }));
-        setSelectedObjectId(newObjects[0].id);
+        if (newObjects.length > 0) setSelectedObjectId(newObjects[0].id);
       }
     } catch (err) {
       console.error(err);
@@ -150,7 +171,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
 
   return (
     <div className="flex h-screen bg-slate-900 text-white font-sans overflow-hidden">
-      {/* Sidebar: Navigation & Project Library */}
       <div className="w-64 border-r border-slate-800 bg-slate-950 flex flex-col shrink-0">
         <div className="p-6 border-b border-slate-800">
           <div className="flex items-center gap-3 mb-6">
@@ -171,8 +191,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
               className={`p-3 rounded-xl border cursor-pointer group transition-all ${exp.id === item.id ? 'bg-blue-600/10 border-blue-500/50' : 'bg-slate-900/40 border-slate-800 hover:border-slate-700'}`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold truncate pr-2">{item.name}</span>
-                <span className="text-[7px] font-mono text-slate-500">{item.trackingType}</span>
+                <span className="text-[10px] font-bold truncate pr-2">{String(item.name)}</span>
+                <span className="text-[7px] font-mono text-slate-500">{String(item.trackingType)}</span>
               </div>
               <div className="mt-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button onClick={(e) => { e.stopPropagation(); onDelete(item.id); }} className="text-[7px] font-bold text-red-500/70 hover:text-red-500">DELETE</button>
@@ -182,7 +202,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         </div>
       </div>
 
-      {/* Main Authoring Panel */}
       <div className="w-80 border-r border-slate-800 bg-slate-950 flex flex-col shrink-0 shadow-2xl z-10">
         <div className="flex bg-slate-900 p-1 m-4 rounded-xl border border-slate-800">
           {(['hierarchy', 'tracking', 'interactivity', 'ai'] as const).map(tab => (
@@ -191,7 +210,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
               onClick={() => setActiveTab(tab)} 
               className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase tracking-tighter transition-all ${activeTab === tab ? 'bg-slate-800 text-blue-400 border border-slate-700 shadow-lg shadow-black/50' : 'text-slate-500'}`}
             >
-              {tab === 'hierarchy' ? 'Scene' : tab === 'interactivity' ? 'Logic' : tab}
+              {tab === 'hierarchy' ? 'Scene' : tab === 'interactivity' ? 'Logic' : String(tab).toUpperCase()}
             </button>
           ))}
         </div>
@@ -209,7 +228,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                       className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${selectedObjectId === obj.id ? 'bg-blue-600/10 border-blue-500/50 text-white' : 'bg-slate-900/40 border-slate-800 text-slate-500 hover:border-slate-700'}`}
                     >
                       <div className="w-5 h-5 bg-slate-800 rounded flex items-center justify-center text-[10px]">📦</div>
-                      <span className="text-[10px] font-bold truncate flex-1">{obj.name}</span>
+                      <span className="text-[10px] font-bold truncate flex-1">{String(obj.name)}</span>
                       <button onClick={(e) => { e.stopPropagation(); setExp(prev => ({ ...prev, sceneObjects: prev.sceneObjects.filter(o => o.id !== obj.id) })); }} className="hover:text-red-400 text-xs">✕</button>
                     </div>
                   ))}
@@ -235,12 +254,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                   
                   {(['position', 'rotation'] as const).map(prop => (
                     <div key={prop} className="space-y-4">
-                      <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest">{prop}</p>
+                      <p className="text-[8px] font-bold text-slate-600 uppercase tracking-widest">{String(prop).toUpperCase()}</p>
                       {(['x', 'y', 'z'] as const).map(axis => (
                         <div key={`${prop}-${axis}`} className="space-y-1">
                           <div className="flex justify-between text-[7px] font-mono text-slate-500 uppercase">
                             <span>{axis}</span>
-                            <span>{selectedObject.transform[prop][axis].toFixed(2)}</span>
+                            <span>{Number(selectedObject.transform[prop][axis]).toFixed(2)}</span>
                           </div>
                           <input 
                             type="range" min={prop === 'rotation' ? 0 : -5} max={prop === 'rotation' ? 360 : 5} step={prop === 'rotation' ? 1 : 0.01}
@@ -269,7 +288,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                       className={`p-4 rounded-xl border text-[10px] font-black uppercase transition-all flex flex-col items-center gap-2 ${exp.trackingType === mode ? 'bg-blue-600 border-blue-400 shadow-xl shadow-blue-900/40' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700'}`}
                     >
                       <span className="text-xl">{mode === 'image' ? '📸' : mode === 'surface' ? '🏠' : mode === 'face' ? '👤' : '🌀'}</span>
-                      <span className="tracking-tighter">{mode}</span>
+                      <span className="tracking-tighter">{String(mode)}</span>
                     </button>
                   ))}
                 </div>
@@ -358,7 +377,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         </div>
       </div>
 
-      {/* Viewport: Staging Engine */}
       <div className="flex-1 bg-[#050505] relative flex items-center justify-center overflow-hidden">
         <div className="absolute inset-0 opacity-20 z-0" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #1e293b 1px, transparent 0)', backgroundSize: '40px 40px' }} />
 
@@ -388,17 +406,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
               </group>
             ))}
             
-            {/* Context-aware Ground Plane */}
-            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
-              <planeGeometry args={[12, 12]} />
-              <meshStandardMaterial 
-                map={exp.trackingType === 'image' && exp.assets.targetImage ? new THREE.TextureLoader().load(exp.assets.targetImage) : null}
-                color={exp.assets.targetImage ? 'white' : '#0a0a0c'} 
-                transparent 
-                opacity={exp.assets.targetImage ? 1 : 0.8}
-                roughness={1}
-              />
-            </mesh>
+            <GroundPlane trackingType={exp.trackingType} targetImage={exp.assets.targetImage} />
             <gridHelper args={[20, 40, '#1e293b', '#0f172a']} position={[0, -0.06, 0]} />
             
             {exp.trackingType === 'portal' && <Sky sunPosition={[100, 20, 100]} />}
@@ -407,13 +415,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           <ContactShadows opacity={0.5} scale={20} blur={2.5} far={4} color="#000" />
         </Canvas>
 
-        {/* HUD Elements */}
         <div className="absolute top-10 left-10 pointer-events-none space-y-4">
           <div className="p-6 bg-black/70 backdrop-blur-3xl border border-white/5 rounded-3xl shadow-2xl">
-            <h1 className="text-xl font-black tracking-tighter uppercase leading-none">{exp.name || 'UNNAMED_SPACE'}</h1>
+            <h1 className="text-xl font-black tracking-tighter uppercase leading-none">{String(exp.name || 'UNNAMED_SPACE')}</h1>
             <div className="flex items-center gap-3 mt-3">
               <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-              <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">{exp.trackingType} core ready</span>
+              <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest">{String(exp.trackingType)} core ready</span>
             </div>
           </div>
           <div className="flex gap-2">
