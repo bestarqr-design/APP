@@ -1,5 +1,5 @@
 
-export type TrackingType = 'image' | 'surface' | 'face' | 'portal';
+export type TrackingType = 'image' | 'surface' | 'face' | 'portal' | 'hand' | 'body';
 
 export interface Vector3 {
   x: number;
@@ -55,6 +55,7 @@ export interface ARExperience {
     shadowIntensity: number;
     exposure: number;
     bloom: boolean;
+    bloomIntensity: number;
     autoRotate: boolean;
     ghostMode: boolean;
     gestureControl: boolean;

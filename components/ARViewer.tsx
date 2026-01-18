@@ -1,7 +1,8 @@
 
 import React, { useEffect, useRef, useState, Suspense, useMemo } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { useGLTF, Environment, ContactShadows, PerspectiveCamera, useTexture, Float, Sky } from '@react-three/drei';
+import { useGLTF, Environment, ContactShadows, PerspectiveCamera, useTexture, Float, Sky, CubeCamera, useVideoTexture } from '@react-three/drei';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { ARExperience, SceneObject } from '../types';
 import { PoseSmoother } from '../utils/kalman';
@@ -11,6 +12,27 @@ interface ARViewerProps {
   onUpdate?: (transform: ARExperience['transform']) => void;
   onTrackingStatusChange?: (status: 'searching' | 'found' | 'lost') => void;
 }
+
+const DynamicEnvironment = ({ videoElement }: { videoElement: HTMLVideoElement | null }) => {
+  const texture = useVideoTexture(videoElement as any);
+  
+  if (!videoElement) return null;
+
+  return (
+    <CubeCamera frames={Infinity} resolution={256} near={1} far={1000}>
+      {(textureCube) => (
+        <>
+          <Environment map={textureCube} />
+          {/* Layer 1 is for environment map capture only */}
+          <mesh visible={true} layers={1}>
+            <sphereGeometry args={[10, 64, 64]} />
+            <meshBasicMaterial map={texture} side={THREE.BackSide} />
+          </mesh>
+        </>
+      )}
+    </CubeCamera>
+  );
+};
 
 const ModelInstance = ({ obj, rotationOffset }: { obj: SceneObject, rotationOffset: number }) => {
   const { scene } = useGLTF(obj.url);
@@ -26,6 +48,11 @@ const ModelInstance = ({ obj, rotationOffset }: { obj: SceneObject, rotationOffs
     clonedScene.traverse((node: any) => {
       if (node.isMesh) {
         if (diffuseMap) node.material.map = diffuseMap;
+        // Boost metallic look if metallic-ish materials found
+        if (node.material.metalness !== undefined) {
+          node.material.metalness = Math.max(node.material.metalness, 0.8);
+          node.material.roughness = Math.min(node.material.roughness, 0.2);
+        }
         node.material.needsUpdate = true;
       }
     });
@@ -42,13 +69,18 @@ const ModelInstance = ({ obj, rotationOffset }: { obj: SceneObject, rotationOffs
 const ARSceneContent: React.FC<{ 
   experience: ARExperience; 
   isTracking: boolean;
-  smoother: PoseSmoother;
+  videoElement: HTMLVideoElement | null;
   onTransformChange: (t: ARExperience['transform']) => void;
-}> = ({ experience, isTracking, smoother, onTransformChange }) => {
+}> = ({ experience, isTracking, videoElement, onTransformChange }) => {
   const rootRef = useRef<THREE.Group>(null);
-  const { camera, raycaster, size } = useThree();
+  const { camera, raycaster, size, gl } = useThree();
   const [rotationOffset, setRotationOffset] = useState(experience.transform.rotation.y);
   
+  // Update Renderer Exposure from Config
+  useEffect(() => {
+    gl.toneMappingExposure = experience.config.exposure;
+  }, [experience.config.exposure, gl]);
+
   // Gesture State
   const pointers = useRef(new Map<number, THREE.Vector2>());
   const initialPinchDist = useRef<number>(0);
@@ -144,39 +176,53 @@ const ARSceneContent: React.FC<{
   };
 
   return (
-    <group 
-      ref={rootRef} 
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerUp}
-      position={[experience.transform.position.x, experience.transform.position.y, experience.transform.position.z]}
-      scale={[experience.transform.scale.x, experience.transform.scale.y, experience.transform.scale.z]}
-    >
-      {experience.sceneObjects.map(obj => (
-        <group 
-          key={obj.id}
-          position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]}
-          rotation={[
-            THREE.MathUtils.degToRad(obj.transform.rotation.x), 
-            THREE.MathUtils.degToRad(obj.transform.rotation.y), 
-            THREE.MathUtils.degToRad(obj.transform.rotation.z)
-          ]}
-          scale={[obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z]}
-        >
-          <Suspense fallback={null}>
-            <Float 
-              speed={obj.animation.autoPlay ? 2.5 : 0} 
-              rotationIntensity={0.25} 
-              floatIntensity={0.25}
-            >
-              <ModelInstance obj={obj} rotationOffset={rotationOffset} />
-            </Float>
-          </Suspense>
-        </group>
-      ))}
-      <ContactShadows opacity={experience.config.shadowIntensity} scale={20} blur={3} far={15} color="#000" />
-    </group>
+    <>
+      <DynamicEnvironment videoElement={videoElement} />
+      
+      <group 
+        ref={rootRef} 
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+        position={[experience.transform.position.x, experience.transform.position.y, experience.transform.position.z]}
+        scale={[experience.transform.scale.x, experience.transform.scale.y, experience.transform.scale.z]}
+      >
+        {experience.sceneObjects.map(obj => (
+          <group 
+            key={obj.id}
+            position={[obj.transform.position.x, obj.transform.position.y, obj.transform.position.z]}
+            rotation={[
+              THREE.MathUtils.degToRad(obj.transform.rotation.x), 
+              THREE.MathUtils.degToRad(obj.transform.rotation.y), 
+              THREE.MathUtils.degToRad(obj.transform.rotation.z)
+            ]}
+            scale={[obj.transform.scale.x, obj.transform.scale.y, obj.transform.scale.z]}
+          >
+            <Suspense fallback={null}>
+              <Float 
+                speed={obj.animation.autoPlay ? 2.5 : 0} 
+                rotationIntensity={0.25} 
+                floatIntensity={0.25}
+              >
+                <ModelInstance obj={obj} rotationOffset={rotationOffset} />
+              </Float>
+            </Suspense>
+          </group>
+        ))}
+        <ContactShadows opacity={experience.config.shadowIntensity} scale={20} blur={3} far={15} color="#000" />
+      </group>
+
+      <EffectComposer>
+        {experience.config.bloom && (
+          <Bloom 
+            intensity={experience.config.bloomIntensity} 
+            luminanceThreshold={0.5} 
+            luminanceSmoothing={0.025} 
+          />
+        )}
+      </EffectComposer>
+    </>
   );
 };
 
@@ -184,7 +230,7 @@ export const ARViewer: React.FC<ARViewerProps> = ({ experience, onUpdate, onTrac
   const [isTracking, setIsTracking] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const poseSmootherRef = useRef(new PoseSmoother());
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const setupCamera = async () => {
@@ -195,7 +241,10 @@ export const ARViewer: React.FC<ARViewerProps> = ({ experience, onUpdate, onTrac
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => videoRef.current?.play();
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play();
+            setVideoElement(videoRef.current);
+          };
         }
         // Simulation of high-fidelity spatial anchoring
         const timer = setTimeout(() => {
@@ -234,7 +283,7 @@ export const ARViewer: React.FC<ARViewerProps> = ({ experience, onUpdate, onTrac
           <ARSceneContent 
             experience={experience} 
             isTracking={isTracking} 
-            smoother={poseSmootherRef.current}
+            videoElement={videoElement}
             onTransformChange={onUpdate || (() => {})}
           />
           <Suspense fallback={null}>

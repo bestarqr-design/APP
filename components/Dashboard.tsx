@@ -48,7 +48,15 @@ const createEmptyExperience = (): ARExperience => ({
     scale: { x: 1, y: 1, z: 1 }
   },
   assets: { targetImage: '' },
-  config: { shadowIntensity: 0.8, exposure: 1.0, bloom: true, autoRotate: false, ghostMode: true, gestureControl: true },
+  config: { 
+    shadowIntensity: 0.8, 
+    exposure: 1.0, 
+    bloom: true, 
+    bloomIntensity: 1.5,
+    autoRotate: false, 
+    ghostMode: true, 
+    gestureControl: true 
+  },
   businessData: { businessName: 'Lumina Global', ctaLink: 'https://lumina-ar.io' }
 });
 
@@ -312,6 +320,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         cardHover: 'hover:bg-blue-600/5'
       };
 
+  const getTrackingIcon = (mode: TrackingType) => {
+    switch(mode) {
+      case 'surface': return '🛰️';
+      case 'image': return '📸';
+      case 'hand': return '🖐️';
+      case 'body': return '🧍';
+      case 'face': return '🎭';
+      case 'portal': return '🌀';
+      default: return '📍';
+    }
+  };
+
   return (
     <div className={`flex h-screen ${themeClasses.bg} ${themeClasses.text} font-sans overflow-hidden transition-all duration-300`}>
       {/* Toast Notification Layer */}
@@ -394,13 +414,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                <div className="space-y-4">
                   <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Anchor Logic</span>
                   <div className="grid grid-cols-2 gap-3">
-                    {(['surface', 'image'] as const).map(mode => (
+                    {(['surface', 'image', 'hand', 'body'] as const).map(mode => (
                       <button 
                         key={mode}
-                        onClick={() => setExp(prev => ({ ...prev, trackingType: mode }))}
+                        onClick={() => {
+                          setExp(prev => ({ ...prev, trackingType: mode }));
+                          addToast(`Switched to ${mode} tracking`, 'info');
+                        }}
                         className={`p-6 rounded-3xl border text-[10px] font-black uppercase flex flex-col items-center gap-3 transition-all ${exp.trackingType === mode ? 'bg-blue-600 border-blue-400 text-white shadow-2xl shadow-blue-500/20' : `bg-transparent ${themeClasses.border} ${themeClasses.subText} hover:border-blue-500/40 hover:scale-[1.02]`}`}
                       >
-                        <span className="text-3xl">{mode === 'surface' ? '🛰️' : '📸'}</span>
+                        <span className="text-3xl">{getTrackingIcon(mode)}</span>
                         {mode}
                       </button>
                     ))}
@@ -448,7 +471,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                           <img src={project.assets.targetImage} className="w-full h-full object-cover opacity-60 group-hover:opacity-100 group-hover:scale-110 transition-all duration-700" alt={project.name} />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center opacity-10">
-                            <span className="text-4xl">{project.trackingType === 'surface' ? '🛰️' : '📸'}</span>
+                            <span className="text-4xl">{getTrackingIcon(project.trackingType)}</span>
                           </div>
                         )}
                         <div className="absolute top-4 left-4">
@@ -669,28 +692,57 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
 
             <div className="space-y-6 pt-8 border-t border-white/5">
               <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Neural Config</span>
-              <div className="space-y-3">
-                {[
-                  { label: 'Kinetic Rotation', key: 'autoRotate', icon: '🔄' },
-                  { label: 'Gesture Capture', key: 'gestureControl', icon: '🤌' },
-                  { label: 'Ghost Calibration', key: 'ghostMode', icon: '👻' }
-                ].map(opt => (
-                  <label key={opt.key} className="flex items-center justify-between p-5 bg-blue-500/5 rounded-3xl border border-blue-500/10 cursor-pointer hover:bg-blue-500/10 transition-all active:scale-98">
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg">{opt.icon}</span>
-                      <span className="text-[10px] font-black uppercase tracking-tight">{opt.label}</span>
-                    </div>
-                    <div className="relative inline-flex items-center cursor-pointer">
-                      <input 
-                        type="checkbox" 
-                        checked={(exp.config as any)[opt.key]} 
-                        onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, [opt.key]: e.target.checked } }))}
-                        className="sr-only peer"
-                      />
-                      <div className="w-10 h-6 bg-slate-700/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[4px] after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shadow-inner"></div>
-                    </div>
-                  </label>
-                ))}
+              <div className="space-y-6 px-1">
+                <div className="space-y-2">
+                   <div className="flex justify-between text-[9px] font-mono uppercase tracking-[0.1em] text-blue-500 font-bold">
+                      <span>Exposure</span>
+                      <span>{exp.config.exposure.toFixed(2)}</span>
+                   </div>
+                   <input 
+                    type="range" min={0} max={2} step={0.01} 
+                    value={exp.config.exposure} 
+                    onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, exposure: parseFloat(e.target.value) } }))}
+                    className="w-full h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600"
+                   />
+                </div>
+                
+                <div className="space-y-2">
+                   <div className="flex justify-between text-[9px] font-mono uppercase tracking-[0.1em] text-blue-500 font-bold">
+                      <span>Bloom Intensity</span>
+                      <span>{exp.config.bloomIntensity.toFixed(2)}</span>
+                   </div>
+                   <input 
+                    type="range" min={0} max={5} step={0.01} 
+                    value={exp.config.bloomIntensity} 
+                    onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, bloomIntensity: parseFloat(e.target.value) } }))}
+                    className="w-full h-1 bg-blue-500/10 rounded-full appearance-none accent-blue-600"
+                   />
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  {[
+                    { label: 'Bloom Engine', key: 'bloom', icon: '✨' },
+                    { label: 'Kinetic Rotation', key: 'autoRotate', icon: '🔄' },
+                    { label: 'Gesture Capture', key: 'gestureControl', icon: '🤌' },
+                    { label: 'Ghost Calibration', key: 'ghostMode', icon: '👻' }
+                  ].map(opt => (
+                    <label key={opt.key} className="flex items-center justify-between p-4 bg-blue-500/5 rounded-2xl border border-blue-500/10 cursor-pointer hover:bg-blue-500/10 transition-all">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">{opt.icon}</span>
+                        <span className="text-[10px] font-black uppercase tracking-tight">{opt.label}</span>
+                      </div>
+                      <div className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={(exp.config as any)[opt.key]} 
+                          onChange={e => setExp(prev => ({ ...prev, config: { ...prev.config, [opt.key]: e.target.checked } }))}
+                          className="sr-only peer"
+                        />
+                        <div className="w-8 h-5 bg-slate-700/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 shadow-inner"></div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
               </div>
             </div>
 
