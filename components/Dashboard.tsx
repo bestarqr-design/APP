@@ -111,6 +111,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
   const [isExporting, setIsExporting] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<string | null>(null);
   
   const modelInputRef = useRef<HTMLInputElement>(null);
   const targetInputRef = useRef<HTMLInputElement>(null);
@@ -249,25 +250,62 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
     }
   };
 
-  const handleExport = async () => {
+  const handleExport = async (targetExp: ARExperience = exp) => {
     setIsExporting(true);
-    addToast("Preparing Project Bundle...", "info");
+    addToast(`Bundling: ${targetExp.name}`, "info");
     try {
       const zip = new JSZip();
-      const projectData = JSON.stringify(exp, null, 2);
-      zip.file(`${exp.name.replace(/\s+/g, '_')}_config.json`, projectData);
       
+      // Configuration JSON
+      const projectData = JSON.stringify(targetExp, null, 2);
+      zip.file(`config.json`, projectData);
+      
+      // Standalone HTML Runner Template
+      const runnerHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LuminaAR | ${targetExp.name}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }</style>
+</head>
+<body>
+    <div id="viewer" style="width: 100vw; height: 100vh;"></div>
+    <div style="position: absolute; bottom: 20px; left: 20px; color: white; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px; font-size: 12px;">
+      <b>${targetExp.name}</b><br/>
+      Powered by Lumina Studio
+    </div>
+    <script>
+      console.log('Lumina Bundle Loaded: ${targetExp.id}');
+      // Note: This is a placeholder for the full compiled viewer runtime
+      // In a production environment, this would initialize the AR engine with config.json
+    </script>
+</body>
+</html>`;
+      zip.file('index.html', runnerHtml);
+      zip.file('README.txt', `Lumina Studio Export Bundle\nProject: ${targetExp.name}\nID: ${targetExp.id}\n\nHost these files on a secure HTTPS server to launch your AR experience.`);
+
       const content = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(content);
       const a = document.createElement('a');
+      a.style.display = 'none';
       a.href = url;
-      a.download = `${exp.name.replace(/\s+/g, '_')}_bundle.zip`;
+      a.download = `${(targetExp.name || 'Lumina_Project').trim().replace(/\s+/g, '_')}_bundle.zip`;
+      
+      // Robust download handling for all browsers
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
-      addToast("Project Exported Successfully", "success");
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+      
+      addToast("Project Bundle Downloaded", "success");
     } catch (e) {
       console.error("Export failed", e);
-      addToast("Export Operation Failed", "error");
+      addToast("Export Generation Failed", "error");
     } finally {
       setIsExporting(false);
     }
@@ -339,7 +377,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         {toasts.map(toast => (
           <div 
             key={toast.id} 
-            className={`px-8 py-4 rounded-3xl backdrop-blur-2xl border flex items-center gap-4 shadow-2xl animate-in slide-in-from-right-10 duration-500 ${
+            className={`px-8 py-4 rounded-3xl backdrop-blur-2xl border flex items-center gap-4 shadow-2xl animate-slide-in-right ${
               toast.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' :
               toast.type === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400' :
               'bg-blue-500/10 border-blue-500/20 text-blue-400'
@@ -352,6 +390,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           </div>
         ))}
       </div>
+
+      {/* Confirmation Modal (Pop-up) */}
+      {deleteConfirmation && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+           <div className={`w-[400px] p-10 rounded-[3rem] border shadow-2xl animate-scale-up ${themeClasses.panel} ${themeClasses.border}`}>
+              <div className="text-center space-y-6">
+                 <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center text-3xl mx-auto">🗑️</div>
+                 <div className="space-y-2">
+                   <h2 className="text-xl font-black uppercase tracking-tighter">Destroy Project?</h2>
+                   <p className="text-[10px] uppercase tracking-[0.2em] opacity-40 leading-relaxed font-bold">This operation is irreversible. All spatial data for this experience will be purged.</p>
+                 </div>
+                 <div className="flex gap-4 pt-4">
+                   <button 
+                    onClick={() => setDeleteConfirmation(null)}
+                    className={`flex-1 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest ${themeClasses.accent} hover:opacity-80 transition-all`}
+                   >Abort</button>
+                   <button 
+                    onClick={() => { onDelete(deleteConfirmation); setDeleteConfirmation(null); addToast("Project Permanently Deleted", "error"); }}
+                    className="flex-1 py-4 bg-red-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-red-500 transition-all shadow-xl shadow-red-900/20"
+                   >Purge Data</button>
+                 </div>
+              </div>
+           </div>
+        </div>
+      )}
 
       {/* Sidebar - Control Tower */}
       <div className={`w-80 border-r ${themeClasses.border} ${themeClasses.panel} flex flex-col shrink-0 z-30 shadow-2xl`}>
@@ -382,7 +445,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           </div>
 
           {activeSidebarTab === 'hierarchy' && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-left-4">
+            <div className="space-y-4 animate-slide-in-left">
               <div className="flex items-center justify-between px-2">
                 <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Spatial Registry</span>
                 <button onClick={() => modelInputRef.current?.click()} className="text-[9px] font-black text-blue-500 hover:text-blue-400 hover:underline">+ NEW ASSET</button>
@@ -410,7 +473,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           )}
 
           {activeSidebarTab === 'tracking' && (
-            <div className="space-y-8 animate-in fade-in duration-500">
+            <div className="space-y-8 animate-fade-in">
                <div className="space-y-4">
                   <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Anchor Logic</span>
                   <div className="grid grid-cols-2 gap-3">
@@ -430,7 +493,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                   </div>
                </div>
                {exp.trackingType === 'image' && (
-                 <div className="space-y-4 animate-in slide-in-from-top-4 duration-500">
+                 <div className="space-y-4 animate-slide-in-up">
                     <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Image Descriptor Calibration</span>
                     <div onClick={() => targetInputRef.current?.click()} className={`aspect-square ${themeClasses.bg} border-2 border-dashed ${themeClasses.border} rounded-[2.5rem] flex flex-col items-center justify-center cursor-pointer hover:border-blue-500/50 transition-all overflow-hidden group shadow-inner relative`}>
                       {exp.assets.targetImage ? (
@@ -448,7 +511,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           )}
 
           {activeSidebarTab === 'gallery' && (
-            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="space-y-4 animate-slide-in-up">
                <div className="flex items-center justify-between px-2 mb-2">
                  <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Project Repository</span>
                  <button 
@@ -474,10 +537,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                             <span className="text-4xl">{getTrackingIcon(project.trackingType)}</span>
                           </div>
                         )}
-                        <div className="absolute top-4 left-4">
+                        <div className="absolute top-4 left-4 flex gap-2">
                            <span className="px-3 py-1 bg-black/60 backdrop-blur-md rounded-full text-[7px] font-black uppercase tracking-widest text-white border border-white/10">
                              {project.trackingType}
                            </span>
+                        </div>
+                        <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                           <button 
+                             onClick={(e) => { e.stopPropagation(); handleExport(project); }}
+                             className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-xl hover:scale-110 active:scale-95 transition-all"
+                             title="Download App Bundle"
+                           >📦</button>
                         </div>
                      </div>
 
@@ -498,7 +568,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
                             className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[8px] font-black uppercase tracking-widest transition-all"
                            >Launch</button>
                            <button 
-                            onClick={(e) => { e.stopPropagation(); onDelete(project.id); addToast("Project Removed", "info"); }} 
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirmation(project.id); }} 
                             className="w-10 h-10 flex items-center justify-center bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl transition-all"
                            >
                              <span className="text-xs">✕</span>
@@ -525,7 +595,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
           )}
 
           {activeSidebarTab === 'ai' && (
-            <div className="space-y-4 animate-in fade-in duration-500">
+            <div className="space-y-4 animate-fade-in">
               <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 px-2">Prompt-to-Spatial Engine</span>
               <textarea 
                 value={aiPrompt}
@@ -547,7 +617,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         <div className={`p-6 border-t ${themeClasses.border} space-y-4 ${themeClasses.panel}`}>
           <div className="flex gap-2">
             <button onClick={handleSave} className={`flex-1 py-4 ${themeClasses.accent} rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500/5 transition-all active:scale-95`}>Save Draft</button>
-            <button onClick={handleExport} disabled={isExporting} title="Export Project ZIP" className={`p-4 ${themeClasses.accent} rounded-2xl text-lg hover:bg-amber-500/10 transition-all active:scale-90 ${isExporting ? 'animate-pulse' : ''}`}>
+            <button onClick={() => handleExport()} disabled={isExporting} title="Export Project Bundle" className={`p-4 ${themeClasses.accent} rounded-2xl text-lg hover:bg-amber-500/10 transition-all active:scale-90 ${isExporting ? 'animate-pulse' : ''}`}>
               {isExporting ? '⏳' : '📦'}
             </button>
           </div>
@@ -561,12 +631,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
         <div className="absolute top-10 left-10 z-20 p-8 bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] shadow-2xl min-w-[360px] group/hud hover:bg-black/80 transition-all">
           <div className="flex flex-col gap-1 mb-2">
             <span className="text-[8px] font-black uppercase tracking-[0.5em] text-blue-500/80">Project Workspace</span>
-            <input 
-              value={exp.name}
-              onChange={e => setExp(prev => ({ ...prev, name: e.target.value }))}
-              placeholder="Unnamed Experience"
-              className="bg-transparent text-2xl font-black uppercase tracking-tighter text-white outline-none w-full focus:text-blue-400 transition-colors border-b border-transparent focus:border-blue-500/30 pb-1"
-            />
+            <div className="relative group">
+              <input 
+                value={exp.name}
+                onChange={e => setExp(prev => ({ ...prev, name: e.target.value }))}
+                placeholder="Unnamed Experience"
+                className="bg-transparent text-2xl font-black uppercase tracking-tighter text-white outline-none w-full focus:text-blue-400 transition-colors border-b border-transparent focus:border-blue-500/30 pb-1"
+              />
+              <span className="absolute -top-3 right-0 text-[7px] font-black text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity uppercase tracking-widest">Edit Name</span>
+            </div>
           </div>
           <div className="flex items-center gap-4 mt-2">
             <div className="flex gap-1.5">
@@ -624,7 +697,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ experiences, onSave, onDel
       {/* Right Sidebar - Logic Engine */}
       <div className={`w-80 border-l ${themeClasses.border} ${themeClasses.panel} flex flex-col shrink-0 overflow-y-auto custom-scrollbar shadow-2xl z-20`}>
         {selectedObject ? (
-          <div className="p-8 space-y-12 animate-in slide-in-from-right-6 duration-500">
+          <div className="p-8 space-y-12 animate-slide-in-right">
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-[0.4em] text-blue-500">Identity Descriptor</span>
