@@ -1,0 +1,7 @@
+{
+  "name": "WebAR Engine",
+  "description": "A high-fidelity no-code WebAR creation and hosting platform using React Three Fiber, MindAR, and Kalman filtering for stabilized industrial-grade AR experiences.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
