@@ -13,6 +13,16 @@ export interface AnimationConfig {
   clipName?: string;
 }
 
+export interface MaterialConfig {
+  map?: string;
+  normalMap?: string;
+  roughnessMap?: string;
+  tiling: {
+    x: number;
+    y: number;
+  };
+}
+
 export interface SceneObject {
   id: string;
   name: string;
@@ -23,6 +33,7 @@ export interface SceneObject {
     scale: Vector3;
   };
   animation: AnimationConfig;
+  material?: MaterialConfig;
 }
 
 export interface ARExperience {
@@ -36,9 +47,9 @@ export interface ARExperience {
     scale: Vector3;
   };
   assets: {
-    targetImage?: string; // Marker URL
+    targetImage?: string; 
     envMap?: string;
-    portalSky?: string; // 360 view inside portal
+    portalSky?: string; 
   };
   config: {
     shadowIntensity: number;
@@ -46,6 +57,7 @@ export interface ARExperience {
     bloom: boolean;
     autoRotate: boolean;
     ghostMode: boolean;
+    gestureControl: boolean;
   };
   businessData: {
     businessName: string;
